@@ -40,6 +40,7 @@ jobs:
           path: |
             .
             !antenv/
+            !layout_data/
 
       # 🚫 Opting Out of Oryx Build
       # If you prefer to disable the Oryx build process during deployment, follow these steps:
