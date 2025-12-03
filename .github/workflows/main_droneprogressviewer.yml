@@ -68,10 +68,17 @@ jobs:
           tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_DC7CA9EAF5224E038FF0717997D167CD }}
           subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BF67602486FE4C8DA90849AE4AED4B20 }}
 
+      - name: Wait for app to be ready
+        run: |
+          echo "Waiting 30 seconds to ensure app is stable before deployment..."
+          sleep 30
+
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
+        continue-on-error: false
         with:
           app-name: 'droneprogressviewer'
           slot-name: 'Production'
+          retry-timeout: 600
           
