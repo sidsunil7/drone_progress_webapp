@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Tracker Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+            background: #f5f5f5;
+            overflow: hidden;
+        }
+        
+        .header {
+            background: #014059;
+            color: white;
+            padding: 15px 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 5px;
+        }
+        
+        .header p {
+            font-size: 14px;
+            opacity: 0.9;
+        }
+        
+        .container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+        
+        .main-view {
+            flex: 1;
+            padding: 20px;
+            padding-bottom: 0;
+            overflow: auto;
+            background: white;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            justify-content: flex-start;
+            min-height: 0;
+            position: relative;
+        }
+        
+        .sidebar {
+            width: 300px;
+            background: white;
+            border-left: 1px solid #ddd;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: -2px 0 4px rgba(0,0,0,0.05);
+        }
+        
+        #layoutCanvas {
+            max-width: 100%;
+            max-height: calc(100vh - 100px);
+            width: auto;
+            height: auto;
+            cursor: crosshair;
+            border: 2px solid #014059;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            border-radius: 4px;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        #layoutContainer {
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 16px;
+        }
+        
+        .loading::after {
+            content: '...';
+            animation: dots 1.5s steps(4, end) infinite;
+        }
+        
+        @keyframes dots {
+            0%, 20% { content: '.'; }
+            40% { content: '..'; }
+            60%, 100% { content: '...'; }
+        }
+        
+        .error {
+            color: #d32f2f;
+            padding: 15px;
+            background: #ffebee;
+            border-radius: 4px;
+            margin: 10px 0;
+            border-left: 4px solid #d32f2f;
+        }
+        
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        
+        .status-not_started {
+            background: rgba(255, 0, 0, 0.3);
+            color: #C62828;
+            border: 1px solid #FF0000;
+        }
+        
+        .status-in_progress {
+            background: rgba(255, 255, 0, 0.3);
+            color: #F57F17;
+            border: 1px solid #FFFF00;
+        }
+        
+        .status-completed {
+            background: rgba(0, 255, 0, 0.3);
+            color: #2E7D32;
+            border: 1px solid #00FF00;
+        }
+        
+        .stage-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: capitalize;
+        }
+        
+        .stage-pile {
+            background: rgba(128, 0, 128, 0.3);
+            color: #800080;
+            border: 1px solid #800080;
+        }
+        
+        .stage-torque_tube {
+            background: rgba(200, 150, 255, 0.3);
+            color: #8B5FBF;
+            border: 1px solid #C896FF;
+        }
+        
+        .stage-module_rails {
+            background: rgba(0, 0, 139, 0.3);
+            color: #00008B;
+            border: 1px solid #00008B;
+        }
+        
+        .stage-solar_panel {
+            background: rgba(135, 206, 250, 0.3);
+            color: #1E90FF;
+            border: 1px solid #87CEFA;
+        }
+        
+        .timeline-container {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            margin: 0;
+            padding: 4px 15px;
+            background: transparent;
+            border-radius: 0;
+            width: auto;
+            max-width: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 0;
+            z-index: 10;
+        }
+        
+        .timeline-container label {
+            display: none;
+        }
+        
+        .timeline-slider {
+            width: 100%;
+            height: 4px;
+            border-radius: 2px;
+            background: #ddd;
+            outline: none;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        
+        .timeline-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #014059;
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        
+        .timeline-slider::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #014059;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+        }
+        
+        .timeline-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 2px;
+            font-size: 10px;
+            color: #666;
+        }
+        
+        .timeline-current {
+            text-align: center;
+            margin-top: 1px;
+            font-weight: bold;
+            color: #014059;
+            font-size: 11px;
+        }
+        
+        .overlay-controls {
+            margin-bottom: 20px;
+            padding: 12px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .toggle-switch {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+        }
+        
+        .toggle-switch input[type="checkbox"] {
+            width: 44px;
+            height: 24px;
+            appearance: none;
+            background: #ccc;
+            border-radius: 12px;
+            position: relative;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .toggle-switch input[type="checkbox"]:checked {
+            background: #014059;
+        }
+        
+        .toggle-switch input[type="checkbox"]::before {
+            content: '';
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: white;
+            top: 2px;
+            left: 2px;
+            transition: left 0.3s;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .toggle-switch input[type="checkbox"]:checked::before {
+            left: 22px;
+        }
+        
+        .toggle-switch span {
+            font-size: 14px;
+            font-weight: 500;
+            color: #333;
+        }
+        
+        .layout-wrapper {
+            display: flex;
+            gap: 20px;
+            width: 100%;
+            flex: 1;
+            min-height: 0;
+            align-items: flex-start;
+            padding-bottom: 50px; /* Space for timeline at bottom */
+        }
+        
+        .layout-view {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-width: 0;
+            height: 100%;
+            min-height: 0;
+        }
+        
+        .tracker-preview {
+            width: fit-content;
+            min-width: 200px;
+            max-width: 400px;
+            background: #ffffff;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            height: calc(100vh - 140px);
+            overflow-y: auto;
+        }
+        
+        #trackerPreviewImage {
+            width: 100%;
+            max-width: 100%;
+            max-height: calc(100vh - 220px);
+            border: 2px solid #014059;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            object-fit: contain;
+        }
+        
+        .tracker-preview-content {
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        
+        .tracker-preview-placeholder {
+            color: #666;
+            text-align: center;
+            font-style: italic;
+        }
+        
+        .tracker-preview-header {
+            width: 100%;
+            margin-bottom: 12px;
+        }
+        
+        .tracker-preview-header h3 {
+            color: #014059;
+            font-size: 16px;
+            margin-bottom: 10px;
+        }
+        
+        .tracker-preview-meta {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 8px;
+        }
+        
+        .tracker-preview-meta .meta-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 12px;
+        }
+        
+        .tracker-preview-meta .meta-label {
+            font-weight: 600;
+            color: #333;
+        }
+        
+        .filter-container {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .filter-container[open] {
+            padding-bottom: 15px;
+        }
+        
+        .filter-summary {
+            cursor: pointer;
+            color: #014059;
+            font-size: 16px;
+            font-weight: 600;
+            outline: none;
+            list-style: none;
+        }
+        
+        .filter-summary::-webkit-details-marker {
+            display: none;
+        }
+        
+        .filter-summary::after {
+            content: '▾';
+            margin-left: 8px;
+            font-size: 12px;
+        }
+        
+        .filter-container:not([open]) .filter-summary::after {
+            content: '▸';
+        }
+        
+        .filter-section {
+            margin-bottom: 15px;
+        }
+        
+        .filter-section-title {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+        
+        .filter-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .filter-button {
+            width: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            border: 1px solid #d0d0d0;
+            border-radius: 6px;
+            background: #ffffff;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            font-size: 13px;
+        }
+        
+        .filter-button:hover:not(:disabled) {
+            border-color: #014059;
+        }
+        
+        .filter-button.active {
+            border-color: #014059;
+            background: #e0f2ff;
+            color: #014059;
+            font-weight: 600;
+        }
+        
+        .filter-legend {
+            display: inline-block;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        
+        .filter-legend.rectangle {
+            width: 16px;
+            height: 10px;
+            border-radius: 2px;
+        }
+        
+        .filter-legend.circle {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .filter-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .filter-button.no-data {
+            opacity: 0.6;
+        }
+        
+        .filter-count {
+            font-weight: 600;
+            color: #014059;
+        }
+        
+        .filter-summary-text {
+            margin-top: 10px;
+            font-size: 13px;
+            color: #014059;
+            font-weight: 500;
+        }
+        
+        .filter-hint {
+            font-size: 13px;
+            color: #666;
+            font-style: italic;
+        }
+        
+        .tracker-info {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 20px;
+            border: 1px solid #e0e0e0;
+        }
+        
+        .tracker-info h3 {
+            color: #014059;
+            margin-bottom: 10px;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Construction Progress Viewer</h1>
+    </div>
+    
+        <div class="container">
+        <div class="main-view">
+            <div class="layout-wrapper">
+                <div class="layout-view">
+                    <div id="layoutContainer">
+                        <div class="loading">Loading layout</div>
+                    </div>
+                </div>
+                <div class="tracker-preview" id="trackerPreview">
+                    <p class="tracker-preview-placeholder">Select a tracker to view its image here.</p>
+                </div>
+            </div>
+            <div class="timeline-container" id="timelineContainer" style="display: none;">
+                <label for="timelineSlider">Timeline:</label>
+                <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="1" value="0" step="1">
+                <div class="timeline-labels">
+                    <span id="timelineStart"></span>
+                    <span id="timelineEnd"></span>
+                </div>
+                <div class="timeline-current" id="timelineCurrent"></div>
+            </div>
+        </div>
+        
+        <div class="sidebar">
+            <div class="overlay-controls">
+                <label class="toggle-switch">
+                    <input type="checkbox" id="overlayToggle" checked>
+                    <span>Show Overlays</span>
+                </label>
+            </div>
+            
+            <details class="filter-container" open>
+                <summary class="filter-summary">Filters</summary>
+                <div class="filter-content">
+                    <div class="filter-section">
+                        <div class="filter-section-title">Stages</div>
+                        <div class="filter-list" id="stageFilters"></div>
+                    </div>
+                    
+                    <div class="filter-section">
+                        <div class="filter-section-title">Statuses</div>
+                        <div class="filter-list" id="statusFilters"></div>
+                    </div>
+                    
+                    <div class="filter-summary-text" id="filterSummary"></div>
+                </div>
+            </details>
+        </div>
+    </div>
+    
+    <script>
+        let currentDate = null;
+        let availableDates = [];
+        let layoutData = null;
+        let canvas = null;
+        let ctx = null;
+        let image = null;
+        let scaleX = 1;
+        let scaleY = 1;
+        let imageScaleFactor = 1.0; // Scale factor from display image to original image
+        let selectedTrackerId = null;
+        const stageDefinitions = [
+            { key: 'pile', label: 'Piles' },
+            { key: 'torque_tube', label: 'Torque Tubes' },
+            { key: 'module_rails', label: 'Module Rails' },
+            { key: 'solar_panel', label: 'Modules' }
+        ];
+        const statusDefinitions = [
+            { key: 'not_started', label: 'Not Started' },
+            { key: 'in_progress', label: 'In Progress' },
+            { key: 'completed', label: 'Completed' }
+        ];
+        let stageCounts = {};
+        let stageStatusCounts = {};
+        let totalTrackers = 0;
+        let selectedStage = null;
+        let selectedStatus = null;
+        
+        // Initialize
+        async function init() {
+            try {
+                // Get available dates
+                const response = await fetch('/api/dates');
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                if (data.dates.length === 0) {
+                    document.getElementById('layoutContainer').innerHTML = 
+                        '<div class="error">No dates found. Please ensure date folders exist in tracker_webapp/layout_data folder.</div>';
+                    return;
+                }
+                
+                availableDates = data.dates;
+                
+                // Setup timeline slider (show if more than one date)
+                const timelineContainer = document.getElementById('timelineContainer');
+                if (availableDates.length > 1) {
+                    timelineContainer.style.display = 'block';
+                    
+                    const slider = document.getElementById('timelineSlider');
+                    slider.max = availableDates.length - 1;
+                    slider.value = 0;
+                    
+                    // Set labels
+                    document.getElementById('timelineStart').textContent = availableDates[0].display;
+                    document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
+                    document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                    
+                    slider.addEventListener('input', (e) => {
+                        const index = parseInt(e.target.value);
+                        const selectedDate = availableDates[index];
+                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        loadLayout(selectedDate.date);
+                    });
+                } else {
+                    timelineContainer.style.display = 'none';
+                }
+                
+                // Load first date
+                currentDate = availableDates[0].date;
+                await loadLayout(currentDate);
+            } catch (error) {
+                showError(`Error initializing: ${error.message}`);
+            }
+        }
+        
+        function showError(message) {
+            document.getElementById('layoutContainer').innerHTML = 
+                `<div class="error">${message}</div>`;
+        }
+        
+        async function loadLayout(dateStr) {
+            try {
+                currentDate = dateStr;
+                
+                // Update timeline slider position if it exists
+                if (availableDates.length > 1) {
+                    const dateIndex = availableDates.findIndex(d => d.date === dateStr);
+                    if (dateIndex >= 0) {
+                        document.getElementById('timelineSlider').value = dateIndex;
+                        document.getElementById('timelineCurrent').textContent = availableDates[dateIndex].display;
+                    }
+                }
+                
+                document.getElementById('layoutContainer').innerHTML = 
+                    '<div class="loading">Loading layout data</div>';
+                
+                // Load layout data
+                const response = await fetch(`/api/layout/${dateStr}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    showError(data.error);
+                    return;
+                }
+                
+                layoutData = data;
+                selectedStage = null;
+                selectedStatus = null;
+                computeTrackerCounts();
+                renderStageFilters();
+                renderStatusFilters();
+                updateFilterSummary();
+                resetTrackerPreview();
+                
+                // Store image scale factor (from display image to original image)
+                imageScaleFactor = data.image_scale_factor || 1.0;
+                console.log('Image scale factor (display to original):', imageScaleFactor);
+                console.log('Original image size:', data.original_image_width, 'x', data.original_image_height);
+                console.log('Display image size:', data.display_image_width, 'x', data.display_image_height);
+                
+                // Attempt to restore previously selected tracker after data is ready
+                restoreSelectedTracker();
+                
+                // Load base image using fetch first to check for errors
+                document.getElementById('layoutContainer').innerHTML = 
+                    '<div class="loading">Loading image</div>';
+                
+                try {
+                    const imageResponse = await fetch(layoutData.base_image);
+                    if (!imageResponse.ok) {
+                        throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`);
+                    }
+                    
+                    // Check content type
+                    const contentType = imageResponse.headers.get('content-type');
+                    console.log('Image content-type:', contentType);
+                    
+                    // Create blob and object URL
+                    const blob = await imageResponse.blob();
+                    const imageUrl = URL.createObjectURL(blob);
+                    
+                    // Load image
+                    const img = new Image();
+                    img.src = imageUrl;
+                    
+                    img.onload = () => {
+                        image = img; // Store reference
+                        URL.revokeObjectURL(imageUrl); // Clean up
+                        setupCanvas(img);
+                        // Setup toggle listener after canvas is ready
+                        setTimeout(() => {
+                            const overlayToggle = document.getElementById('overlayToggle');
+                            if (overlayToggle) {
+                                // Remove existing listener if any
+                                overlayToggle.removeEventListener('change', handleOverlayToggle);
+                                overlayToggle.addEventListener('change', handleOverlayToggle);
+                            }
+                        }, 100);
+                    };
+                    
+                    img.onerror = (e) => {
+                        URL.revokeObjectURL(imageUrl); // Clean up
+                        console.error('Image load error:', e);
+                        console.error('Image src:', layoutData.base_image);
+                        console.error('Blob size:', blob.size, 'bytes');
+                        console.error('Blob type:', blob.type);
+                        
+                        const sizeMB = (blob.size / (1024 * 1024)).toFixed(2);
+                        if (blob.size > 100 * 1024 * 1024) { // > 100MB
+                            showError(`Image is too large (${sizeMB} MB) for browser to load. The server is creating a downscaled version. Please refresh the page in a few moments.`);
+                        } else {
+                            showError(`Error loading layout image. Size: ${sizeMB} MB, Type: ${blob.type}. Please check the browser console for details.`);
+                        }
+                    };
+                } catch (error) {
+                    console.error('Fetch error:', error);
+                    showError(`Error fetching layout image: ${error.message}`);
+                }
+                
+            } catch (error) {
+                showError(`Error loading layout: ${error.message}`);
+            }
+        }
+        
+        function setupCanvas(img) {
+            const container = document.getElementById('layoutContainer');
+            container.innerHTML = '';
+            
+            canvas = document.createElement('canvas');
+            ctx = canvas.getContext('2d');
+            
+            // Calculate scale to fill available space better
+            const timelineContainer = document.getElementById('timelineContainer');
+            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
+                ? timelineContainer.offsetHeight : 0;
+            
+            // Get available space - use viewport height minus header, padding, and timeline
+            // Header: 80px, Main-view padding: 20px (top only, bottom is 0), Timeline: timelineHeight
+            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
+            const containerWidth = container.clientWidth - 40;
+            const containerHeight = Math.max(availableHeight, 400); // Minimum 400px height
+            
+            // Calculate aspect ratios
+            const imgAspect = img.width / img.height;
+            const containerAspect = containerWidth / containerHeight;
+            
+            let width, height;
+            
+            // Fill the container while maintaining aspect ratio
+            if (imgAspect > containerAspect) {
+                // Image is wider - fit to width
+                width = containerWidth;
+                height = containerWidth / imgAspect;
+            } else {
+                // Image is taller - fit to height
+                height = containerHeight;
+                width = containerHeight * imgAspect;
+            }
+            
+            // Ensure we don't exceed container bounds
+            if (width > containerWidth) {
+                width = containerWidth;
+                height = containerWidth / imgAspect;
+            }
+            if (height > containerHeight) {
+                height = containerHeight;
+                width = containerHeight * imgAspect;
+            }
+            
+            canvas.width = width;
+            canvas.height = height;
+            
+            // Calculate scale factors (from canvas pixels to image pixels)
+            scaleX = img.width / width;
+            scaleY = img.height / height;
+            
+            ctx.drawImage(img, 0, 0, width, height);
+            canvas.id = 'layoutCanvas';
+            container.appendChild(canvas);
+            
+            // Add click handler
+            canvas.addEventListener('click', handleClick);
+            
+            // Sync timeline container width with canvas width
+            updateTimelineWidth();
+            
+            // Update timeline position to align with layout view
+            updateTimelinePosition();
+            
+            // Draw overlays after canvas is set up
+            drawOverlays();
+        }
+        
+        function updateTimelineWidth() {
+            const canvas = document.getElementById('layoutCanvas');
+            const timelineContainer = document.getElementById('timelineContainer');
+            const layoutView = document.querySelector('.layout-view');
+            if (canvas && timelineContainer && layoutView) {
+                // Make timeline extend across the full canvas width (with some padding)
+                const mainViewRect = document.querySelector('.main-view').getBoundingClientRect();
+                const canvasRect = canvas.getBoundingClientRect();
+                
+                // Use full canvas width with small padding on sides
+                const timelineWidth = canvas.width * 0.95; // 95% of canvas width
+                const leftPosition = canvasRect.left - mainViewRect.left + (canvas.width * 0.025); // 2.5% padding on left
+                
+                timelineContainer.style.left = leftPosition + 'px';
+                timelineContainer.style.width = timelineWidth + 'px';
+            }
+        }
+        
+        function updateTimelinePosition() {
+            updateTimelineWidth();
+        }
+        
+        // Convert lat/lon boundaries to canvas pixel coordinates
+        function latLonToCanvas(boundary, layoutData) {
+            if (!layoutData.transform || !canvas || !image) {
+                console.warn('latLonToCanvas: Missing requirements', { transform: !!layoutData.transform, canvas: !!canvas, image: !!image });
+                return null;
+            }
+            
+            // Get the transform matrix from TIFF
+            // Rasterio transform format: [a, b, c, d, e, f]
+            // where: lon = a * col + b * row + c
+            //        lat = d * col + e * row + f
+            // For most geospatial images: b = d = 0 (no rotation)
+            const [a, b, c, d, e, f] = layoutData.transform;
+            
+            console.log('latLonToCanvas: Transform', { a, b, c, d, e, f });
+            console.log('latLonToCanvas: Boundary', boundary);
+            
+            // Check if transform is simple (no rotation)
+            const hasRotation = Math.abs(b) > 1e-10 || Math.abs(d) > 1e-10;
+            
+            let tifCoords;
+            
+            if (!hasRotation) {
+                // Simple case: no rotation
+                // col = (lon - c) / a
+                // row = (lat - f) / e
+                const corners = [
+                    { lon: boundary.min_lon, lat: boundary.min_lat },
+                    { lon: boundary.max_lon, lat: boundary.min_lat },
+                    { lon: boundary.max_lon, lat: boundary.max_lat },
+                    { lon: boundary.min_lon, lat: boundary.max_lat }
+                ];
+                
+                tifCoords = corners.map(corner => ({
+                    col: (corner.lon - c) / a,
+                    row: (corner.lat - f) / e
+                }));
+            } else {
+                // General case: with rotation
+                const det = a * e - b * d;
+                if (Math.abs(det) < 1e-10) {
+                    console.warn('latLonToCanvas: Singular transform matrix');
+                    return null;
+                }
+                
+                const corners = [
+                    { lon: boundary.min_lon, lat: boundary.min_lat },
+                    { lon: boundary.max_lon, lat: boundary.min_lat },
+                    { lon: boundary.max_lon, lat: boundary.max_lat },
+                    { lon: boundary.min_lon, lat: boundary.max_lat }
+                ];
+                
+                tifCoords = corners.map(corner => ({
+                    col: (e * (corner.lon - c) - b * (corner.lat - f)) / det,
+                    row: (a * (corner.lat - f) - d * (corner.lon - c)) / det
+                }));
+            }
+            
+            // Find bounding box in TIFF coordinates
+            const minCol = Math.min(...tifCoords.map(c => c.col));
+            const maxCol = Math.max(...tifCoords.map(c => c.col));
+            const minRow = Math.min(...tifCoords.map(c => c.row));
+            const maxRow = Math.max(...tifCoords.map(c => c.row));
+            
+            // Calculate dimensions in TIFF pixels
+            const tifX = minCol;
+            const tifY = minRow;
+            const tifWidth = maxCol - minCol;
+            const tifHeight = maxRow - minRow;
+            
+            console.log('latLonToCanvas: TIFF coords', { tifX, tifY, tifWidth, tifHeight, imageScaleFactor, scaleX, scaleY });
+            
+            // Convert TIFF coordinates to display image coordinates
+            // imageScaleFactor is the ratio from display to original
+            // So to go from TIFF (original) to display, we divide by imageScaleFactor
+            const displayX = tifX / imageScaleFactor;
+            const displayY = tifY / imageScaleFactor;
+            const displayWidth = tifWidth / imageScaleFactor;
+            const displayHeight = tifHeight / imageScaleFactor;
+            
+            // Convert display image coordinates to canvas coordinates
+            // scaleX and scaleY are ratios from canvas to image
+            // So to go from image to canvas, we divide
+            const canvasX = displayX / scaleX;
+            const canvasY = displayY / scaleY;
+            const canvasWidth = displayWidth / scaleX;
+            const canvasHeight = displayHeight / scaleY;
+            
+            const result = {
+                x: canvasX,
+                y: canvasY,
+                width: Math.max(canvasWidth, 2),
+                height: Math.max(canvasHeight, 2),
+                centerX: canvasX + canvasWidth / 2,
+                centerY: canvasY + canvasHeight / 2
+            };
+            
+            console.log('latLonToCanvas: Canvas coords', result);
+            
+            return result;
+        }
+        
+        function getStageColorRGB(stage) {
+            const colors = {
+                'pile': '#800080',           // Dark purple
+                'torque_tube': '#C896FF',    // Light purple
+                'module_rails': '#00008B',    // Dark blue
+                'solar_panel': '#87CEFA'     // Light blue
+            };
+            return colors[stage?.toLowerCase().replace(/\s+/g, '_')] || '#666';
+        }
+        
+        function getStatusColorRGB(status) {
+            const colors = {
+                'not_started': '#FF0000',    // Red
+                'in_progress': '#FFFF00',     // Yellow
+                'completed': '#00FF00'       // Green
+            };
+            return colors[status?.toLowerCase().replace(/\s+/g, '_')] || '#666';
+        }
+        
+        function drawStageRectangle(ctx, coords, stage) {
+            if (!coords) return;
+            
+            // Scale down the rectangle size (make it smaller)
+            const scaleFactor = 0.8; // Reduce to 80% of original size
+            const scaledWidth = coords.width * scaleFactor;
+            const scaledHeight = coords.height * scaleFactor;
+            const scaledX = coords.centerX - scaledWidth / 2;
+            const scaledY = coords.centerY - scaledHeight / 2;
+            
+            const color = getStageColorRGB(stage);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.3;
+            ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            ctx.globalAlpha = 1.0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            
+            // Store scaled rectangle info for dot positioning
+            coords.scaledRect = {
+                x: scaledX,
+                y: scaledY,
+                width: scaledWidth,
+                height: scaledHeight,
+                centerX: coords.centerX
+            };
+        }
+        
+        function drawStatusCircle(ctx, coords, status) {
+            if (!coords) return;
+            
+            // Get scaled rectangle info if available (from drawStageRectangle)
+            const scaledRect = coords.scaledRect;
+            if (!scaledRect) {
+                // Fallback if scaled rect not available
+                const scaleFactor = 0.4;
+                const radius = (coords.width * scaleFactor) / 2;
+                const centerX = coords.centerX;
+                const centerY = coords.y - radius - 2;
+                
+                const color = getStatusColorRGB(status);
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.5;
+                ctx.beginPath();
+                ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1.5;
+                ctx.stroke();
+                return;
+            }
+            
+            // Scale down the circle size (make it smaller)
+            const scaleFactor = 0.4; // Reduce to 40% of rectangle width for diameter
+            const radius = (scaledRect.width * scaleFactor) / 2;
+            const centerX = scaledRect.centerX; // Center horizontally on the rectangle
+            const centerY = scaledRect.y - radius - 2; // Position right above the scaled rectangle with small gap
+            
+            const color = getStatusColorRGB(status);
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.5;
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+            ctx.fill();
+            ctx.globalAlpha = 1.0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        }
+        
+        function drawOverlays() {
+            if (!canvas || !layoutData || !image) {
+                console.log('drawOverlays: Missing requirements', { canvas: !!canvas, layoutData: !!layoutData, image: !!image });
+                return;
+            }
+            
+            const ctx = canvas.getContext('2d');
+            
+            // Clear and redraw base image
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+            
+            // Only draw if toggle is on
+            const overlayToggle = document.getElementById('overlayToggle');
+            if (!overlayToggle) {
+                console.log('drawOverlays: Toggle not found');
+                return;
+            }
+            
+            if (!overlayToggle.checked) {
+                console.log('drawOverlays: Toggle is off');
+                return;
+            }
+            
+            // Get selected filters
+            const stageFilter = selectedStage;
+            const statusFilter = selectedStatus;
+            
+            console.log('drawOverlays: Drawing overlays', { stageFilter, statusFilter, trackerCount: Object.keys(layoutData.tracker_info || {}).length });
+            
+            let drawnCount = 0;
+            let skippedCount = 0;
+            
+            // Iterate through trackers and draw based on filters
+            Object.keys(layoutData.tracker_info || {}).forEach(trackerId => {
+                const info = layoutData.tracker_info[trackerId];
+                const boundary = layoutData.boundaries?.[trackerId];
+                
+                if (!boundary || !info) {
+                    skippedCount++;
+                    return;
+                }
+                
+                // Normalize stage and status keys for comparison
+                const trackerStage = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
+                const trackerStatus = (info.status || '').toLowerCase().replace(/\s+/g, '_');
+                
+                // Filter logic: only draw if matches selected stage/status
+                const matchesStage = !stageFilter || trackerStage === stageFilter.toLowerCase().replace(/\s+/g, '_');
+                const matchesStatus = !statusFilter || trackerStatus === statusFilter.toLowerCase().replace(/\s+/g, '_');
+                
+                if (!matchesStage || !matchesStatus) {
+                    skippedCount++;
+                    return;
+                }
+                
+                // Convert lat/lon to canvas coordinates
+                const canvasCoords = latLonToCanvas(boundary, layoutData);
+                
+                if (!canvasCoords) {
+                    skippedCount++;
+                    return;
+                }
+                
+                // Draw rectangle for stage (this also stores scaled rect info in canvasCoords)
+                drawStageRectangle(ctx, canvasCoords, info.stage);
+                
+                // Draw circle for status (positioned above the scaled rectangle)
+                drawStatusCircle(ctx, canvasCoords, info.status);
+                drawnCount++;
+            });
+            
+            console.log('drawOverlays: Complete', { drawn: drawnCount, skipped: skippedCount });
+        }
+        
+        async function handleClick(event) {
+            const rect = canvas.getBoundingClientRect();
+            // Get click coordinates in displayed image pixels
+            const displayX = (event.clientX - rect.left) * scaleX;
+            const displayY = (event.clientY - rect.top) * scaleY;
+            
+            // Scale from display image coordinates to original image coordinates
+            const originalX = displayX * imageScaleFactor;
+            const originalY = displayY * imageScaleFactor;
+            
+            // Convert to TIFF coordinates (assuming original JPG and TIFF have same dimensions)
+            const tifX = originalX;
+            const tifY = originalY;
+            
+            console.log('Click coordinates:', {
+                'canvas': `${Math.round(event.clientX - rect.left)}, ${Math.round(event.clientY - rect.top)}`,
+                'display_image': `${Math.round(displayX)}, ${Math.round(displayY)}`,
+                'original_image': `${Math.round(originalX)}, ${Math.round(originalY)}`,
+                'tif_coordinates': `${Math.round(tifX)}, ${Math.round(tifY)}`,
+                'scale_factor': imageScaleFactor
+            });
+            
+            try {
+                // Send to server for coordinate conversion
+                const response = await fetch(
+                    `/api/click?x=${tifX}&y=${tifY}&date=${currentDate}`
+                );
+                const result = await response.json();
+                
+                if (result.error) {
+                    const previewDiv = document.getElementById('trackerPreview');
+                    if (previewDiv) {
+                        previewDiv.innerHTML = `<p class="tracker-preview-placeholder">${result.error}</p>`;
+                    }
+                    return;
+                }
+                
+                if (result.tracker_id) {
+                    await displayTracker(result.tracker_id);
+                } else {
+                    const previewDiv = document.getElementById('trackerPreview');
+                    if (previewDiv) {
+                        previewDiv.innerHTML = '<p class="tracker-preview-placeholder">No tracker found at this location. Try clicking on a colored area.</p>';
+                    }
+                }
+            } catch (error) {
+                const previewDiv = document.getElementById('trackerPreview');
+                if (previewDiv) {
+                    previewDiv.innerHTML = `<p class="tracker-preview-placeholder">Error: ${error.message}</p>`;
+                }
+            }
+        }
+        
+        function getStatusClass(status) {
+            if (!status) return '';
+            const statusLower = status.toLowerCase().replace(' ', '_');
+            return `status-${statusLower}`;
+        }
+        
+        function getStageClass(stage) {
+            if (!stage) return '';
+            const stageLower = stage.toLowerCase().replace(' ', '_');
+            return `stage-${stageLower}`;
+        }
+        
+        function formatTrackerCount(count) {
+            return `${count}`;
+        }
+        
+        function resetTrackerPreview() {
+            const previewDiv = document.getElementById('trackerPreview');
+            if (previewDiv) {
+                previewDiv.innerHTML = '<p class="tracker-preview-placeholder">Select a tracker to view its image here.</p>';
+            }
+        }
+        
+        function showPreviewLoading(trackerId, info) {
+            const previewDiv = document.getElementById('trackerPreview');
+            if (previewDiv) {
+                previewDiv.innerHTML = `
+                    <div class="tracker-preview-header">
+                    <h3>${trackerId}</h3>
+                        ${renderPreviewMeta(info)}
+                </div>
+                    <p class="tracker-preview-placeholder">Loading image...</p>
+                `;
+            }
+        }
+        
+        function updateTrackerPreview(trackerId, imageSrc, info, errorMessage) {
+            const previewDiv = document.getElementById('trackerPreview');
+            if (!previewDiv) return;
+            
+            if (errorMessage) {
+                previewDiv.innerHTML = `
+                    <div class="tracker-preview-header">
+                            <h3>${trackerId}</h3>
+                        ${renderPreviewMeta(info)}
+                        </div>
+                    <p class="tracker-preview-placeholder">${errorMessage}</p>
+                `;
+                return;
+            }
+            
+            if (!imageSrc) {
+                previewDiv.innerHTML = `
+                    <div class="tracker-preview-header">
+                            <h3>${trackerId}</h3>
+                        ${renderPreviewMeta(info)}
+                    </div>
+                    <p class="tracker-preview-placeholder">No image available for ${trackerId}.</p>`;
+                return;
+            }
+            
+            previewDiv.innerHTML = `
+                <div class="tracker-preview-content">
+                    <div class="tracker-preview-header">
+                        <h3>${trackerId}</h3>
+                        ${renderPreviewMeta(info)}
+                    </div>
+                    <img id="trackerPreviewImage" src="${imageSrc}" alt="${trackerId}">
+                        </div>
+                    `;
+        }
+        
+        function renderPreviewMeta(info = {}) {
+            const stageClass = getStageClass(info.stage);
+            const statusClass = getStatusClass(info.status);
+            const stageLabel = formatStageLabel((info.stage || '').toLowerCase().replace(/\s+/g, '_')) || info.stage || 'Unknown';
+            const statusLabel = formatStatusLabel((info.status || '').toLowerCase().replace(/\s+/g, '_')) || info.status || 'Unknown';
+            return `
+                <div class="tracker-preview-meta">
+                    <div class="meta-item">
+                        <span class="stage-badge ${stageClass}">${stageLabel}</span>
+                    </div>
+                    <div class="meta-item">
+                        <span class="status-badge ${statusClass}">${statusLabel}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        function restoreSelectedTracker() {
+            if (!selectedTrackerId) {
+                resetTrackerPreview();
+                return;
+            }
+            
+            if (layoutData && layoutData.tracker_info && layoutData.tracker_info[selectedTrackerId]) {
+                displayTracker(selectedTrackerId, true);
+            } else {
+                const previewDiv = document.getElementById('trackerPreview');
+                if (previewDiv) {
+                    previewDiv.innerHTML = `<p class="tracker-preview-placeholder">${selectedTrackerId} is not available for this date.</p>`;
+                }
+            }
+        }
+        
+        function formatStageLabel(stageKey) {
+            const def = stageDefinitions.find(stage => stage.key === stageKey);
+            if (def) return def.label;
+            return stageKey ? stageKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : stageKey;
+        }
+        
+        function formatStatusLabel(statusKey) {
+            const def = statusDefinitions.find(status => status.key === statusKey);
+            if (def) return def.label;
+            return statusKey ? statusKey.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : statusKey;
+        }
+        
+        function computeTrackerCounts() {
+            stageCounts = {};
+            stageStatusCounts = {};
+            totalTrackers = 0;
+            
+            if (!layoutData || !layoutData.tracker_info) {
+                stageDefinitions.forEach(stage => stageCounts[stage.key] = 0);
+                return;
+            }
+            
+            Object.entries(layoutData.tracker_info).forEach(([trackerId, info]) => {
+                const stageKey = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
+                const statusKey = (info.status || '').toLowerCase().replace(/\s+/g, '_');
+                
+                if (!stageCounts[stageKey]) {
+                    stageCounts[stageKey] = 0;
+                }
+                stageCounts[stageKey] += 1;
+                
+                if (!stageStatusCounts[stageKey]) {
+                    stageStatusCounts[stageKey] = {};
+                }
+                if (!stageStatusCounts[stageKey][statusKey]) {
+                    stageStatusCounts[stageKey][statusKey] = 0;
+                }
+                stageStatusCounts[stageKey][statusKey] += 1;
+            });
+            
+            stageDefinitions.forEach(stage => {
+                if (!stageCounts[stage.key]) stageCounts[stage.key] = 0;
+                if (!stageStatusCounts[stage.key]) stageStatusCounts[stage.key] = {};
+                statusDefinitions.forEach(status => {
+                    if (!stageStatusCounts[stage.key][status.key]) {
+                        stageStatusCounts[stage.key][status.key] = 0;
+                    }
+                });
+            });
+            
+            totalTrackers = Object.keys(layoutData.tracker_info).length;
+        }
+        
+        function getStageColor(stageKey) {
+            const colors = {
+                'pile': '#800080',
+                'torque_tube': '#C896FF',
+                'module_rails': '#00008B',
+                'solar_panel': '#87CEFA'
+            };
+            return colors[stageKey] || '#666';
+        }
+        
+        function getStatusColor(statusKey) {
+            const colors = {
+                'not_started': '#FF0000',
+                'in_progress': '#FFFF00',
+                'completed': '#00FF00'
+            };
+            return colors[statusKey] || '#666';
+        }
+        
+        function renderStageFilters() {
+            const container = document.getElementById('stageFilters');
+            if (!container) return;
+            
+            if (!layoutData || !layoutData.tracker_info) {
+                container.innerHTML = '<p class="filter-hint">Tracker data unavailable.</p>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            
+            stageDefinitions.forEach(stage => {
+                const count = stageCounts[stage.key] || 0;
+                const percent = totalTrackers > 0 ? ((count / totalTrackers) * 100).toFixed(0) : 0;
+                const button = document.createElement('button');
+                button.className = `filter-button stage-button ${selectedStage === stage.key ? 'active' : ''}`;
+                if (count === 0) {
+                    button.classList.add('no-data');
+                }
+                button.dataset.stage = stage.key;
+                const legendColor = getStageColor(stage.key);
+                button.innerHTML = `
+                    <span>
+                        <span class="filter-legend rectangle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
+                        ${stage.label} (${percent}%)
+                    </span>
+                    <span class="filter-count">${count}</span>
+                `;
+                button.addEventListener('click', () => handleStageSelection(stage.key));
+                container.appendChild(button);
+            });
+        }
+        
+        function renderStatusFilters() {
+            const container = document.getElementById('statusFilters');
+            if (!container) return;
+            
+            if (!selectedStage) {
+                container.innerHTML = '<p class="filter-hint">Select a stage to view status counts.</p>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            statusDefinitions.forEach(status => {
+                const count = stageStatusCounts[selectedStage]?.[status.key] || 0;
+                const percent = totalTrackers > 0 ? ((count / totalTrackers) * 100).toFixed(0) : 0;
+                const button = document.createElement('button');
+                button.className = `filter-button status-button ${selectedStatus === status.key ? 'active' : ''}`;
+                if (count === 0) {
+                    button.classList.add('no-data');
+                }
+                button.dataset.status = status.key;
+                const legendColor = getStatusColor(status.key);
+                button.innerHTML = `
+                    <span>
+                        <span class="filter-legend circle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
+                        ${status.label} (${percent}%)
+                    </span>
+                    <span class="filter-count">${count}</span>
+                `;
+                button.addEventListener('click', () => handleStatusSelection(status.key));
+                container.appendChild(button);
+            });
+        }
+        
+        function handleStageSelection(stageKey) {
+            selectedStage = selectedStage === stageKey ? null : stageKey;
+            selectedStatus = null;
+            renderStageFilters();
+            renderStatusFilters();
+            updateFilterSummary();
+            drawOverlays();
+        }
+        
+        function handleStatusSelection(statusKey) {
+            if (!selectedStage) return;
+            selectedStatus = selectedStatus === statusKey ? null : statusKey;
+            renderStatusFilters();
+            updateFilterSummary();
+            drawOverlays();
+        }
+        
+        function updateFilterSummary() {
+            const summaryDiv = document.getElementById('filterSummary');
+            if (!summaryDiv) return;
+            
+            if (!selectedStage) {
+                summaryDiv.textContent = 'Select a stage to view tracker counts.';
+                return;
+            }
+            
+            const stageLabel = formatStageLabel(selectedStage);
+            const stageCount = stageCounts[selectedStage] || 0;
+            const stagePercent = totalTrackers > 0 ? ((stageCount / totalTrackers) * 100).toFixed(1) : 0;
+            let summaryText = `${stageLabel}: ${stageCount} (${stagePercent}%)`;
+            
+            if (selectedStatus) {
+                const statusLabel = formatStatusLabel(selectedStatus);
+                const statusCount = stageStatusCounts[selectedStage]?.[selectedStatus] || 0;
+                const statusPercent = totalTrackers > 0 ? ((statusCount / totalTrackers) * 100).toFixed(1) : 0;
+                summaryText += ` • ${statusLabel}: ${statusCount} (${statusPercent}%)`;
+            }
+            
+            summaryDiv.textContent = summaryText;
+        }
+        
+        async function displayTracker(trackerId) {
+            console.log('displayTracker called', { trackerId, currentDate, hasLayoutData: !!layoutData });
+            
+            if (!layoutData) {
+                console.error('displayTracker: No layout data available');
+                return;
+            }
+            
+            selectedTrackerId = trackerId;
+            const info = layoutData.tracker_info?.[trackerId] || {};
+            
+            console.log('displayTracker: Tracker info', info);
+            
+            showPreviewLoading(trackerId, info);
+            
+            // Load tracker image
+            try {
+                const url = `/api/tracker/${currentDate}/${trackerId}`;
+                console.log('displayTracker: Fetching', url);
+                
+                const response = await fetch(url);
+                const data = await response.json();
+                
+                console.log('displayTracker: Response', { hasError: !!data.error, hasImage: !!data.image });
+                
+                if (data.error) {
+                    console.error('displayTracker: Error from server', data.error);
+                    updateTrackerPreview(trackerId, null, info, `Unable to load image for ${trackerId}: ${data.error}`);
+                } else if (data.image) {
+                    console.log('displayTracker: Image loaded successfully');
+                    updateTrackerPreview(trackerId, data.image, info);
+                } else {
+                    console.error('displayTracker: No image in response', data);
+                    updateTrackerPreview(trackerId, null, info, `No image data received for ${trackerId}.`);
+                }
+            } catch (error) {
+                console.error('displayTracker: Exception', error);
+                updateTrackerPreview(trackerId, null, info, `Error loading image for ${trackerId}: ${error.message}`);
+            }
+        }
+        
+        // Handle overlay toggle change
+        function handleOverlayToggle() {
+            console.log('Toggle changed, redrawing overlays');
+            drawOverlays();
+        }
+        
+        // Initialize on page load
+        window.addEventListener('load', () => {
+            init();
+        });
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            if (image && canvas) {
+                setupCanvas(image);
+            } else {
+                updateTimelinePosition();
+            }
+        });
+    </script>
+</body>
+</html>
+

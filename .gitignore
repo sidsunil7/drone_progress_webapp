@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Flask
+instance/
+.webassets-cache
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Analysis script (temporary)
+analyze_files.py
+
+# Large image files - use Railway Volumes or cloud storage instead
+# These files are too large for GitHub (some JPGs are 200+ MB, exceeding 100MB limit)
+*.tif
+*.tiff
+layout_data/**/*.tif
+layout_data/**/*.tiff
+layout_data/**/*.jpg
+layout_data/**/*.jpeg
+# Keep only JSON and CSV files from layout_data
+!layout_data/*.json
+!layout_data/**/*.csv
+
