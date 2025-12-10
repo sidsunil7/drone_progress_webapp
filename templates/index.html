@@ -73,6 +73,7 @@
             border-radius: 4px;
             display: block;
             margin: 0 auto;
+            touch-action: none;
         }
         
         #layoutContainer {
@@ -82,6 +83,60 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .canvas-wrapper {
+            position: relative;
+            display: inline-block;
+            transform-origin: 0 0;
+            transition: transform 0.1s ease-out;
+        }
+        
+        .zoom-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            background: white;
+            padding: 8px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        
+        .zoom-btn {
+            width: 36px;
+            height: 36px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            color: #014059;
+            user-select: none;
+            transition: all 0.2s;
+        }
+        
+        .zoom-btn:hover {
+            background: #f0f0f0;
+            border-color: #014059;
+        }
+        
+        .zoom-btn:active {
+            background: #e0e0e0;
+        }
+        
+        .zoom-reset {
+            font-size: 14px;
+            padding: 4px 8px;
+            height: auto;
         }
         
         .loading {
@@ -534,6 +589,11 @@
                     <div id="layoutContainer">
                         <div class="loading">Loading layout</div>
                     </div>
+                    <div class="zoom-controls" id="zoomControls" style="display: none;">
+                        <button class="zoom-btn" id="zoomInBtn" title="Zoom In">+</button>
+                        <button class="zoom-btn" id="zoomOutBtn" title="Zoom Out">−</button>
+                        <button class="zoom-btn zoom-reset" id="zoomResetBtn" title="Reset Zoom">Reset</button>
+                    </div>
                 </div>
                 <div class="tracker-preview" id="trackerPreview">
                     <p class="tracker-preview-placeholder">Select a tracker to view its image here.</p>
@@ -588,6 +648,12 @@
         let scaleY = 1;
         let imageScaleFactor = 1.0; // Scale factor from display image to original image
         let selectedTrackerId = null;
+        
+        // Zoom and pan state
+        let zoomLevel = 1.0;
+        let panX = 0;
+        let panY = 0;
+        let canvasWrapper = null;
         const stageDefinitions = [
             { key: 'pile', label: 'Piles' },
             { key: 'torque_tube', label: 'Torque Tubes' },
@@ -643,7 +709,7 @@
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
                         document.getElementById('timelineCurrent').textContent = selectedDate.display;
-                        loadLayout(selectedDate.date);
+                        loadLayout(selectedDate.date, true); // Preserve state when switching dates
                     });
                 } else {
                     timelineContainer.style.display = 'none';
@@ -662,7 +728,7 @@
                 `<div class="error">${message}</div>`;
         }
         
-        async function loadLayout(dateStr) {
+        async function loadLayout(dateStr, preserveState = false) {
             try {
                 currentDate = dateStr;
                 
@@ -675,8 +741,11 @@
                     }
                 }
                 
-                document.getElementById('layoutContainer').innerHTML = 
-                    '<div class="loading">Loading layout data</div>';
+                // Only show loading if not preserving state (first load or forced reload)
+                if (!preserveState) {
+                    document.getElementById('layoutContainer').innerHTML = 
+                        '<div class="loading">Loading layout data</div>';
+                }
                 
                 // Load layout data
                 const response = await fetch(`/api/layout/${dateStr}`);
@@ -688,13 +757,22 @@
                 }
                 
                 layoutData = data;
-                selectedStage = null;
-                selectedStatus = null;
+                
+                // Preserve stage selection when switching dates
+                if (!preserveState) {
+                    selectedStage = null;
+                    selectedStatus = null;
+                }
+                
                 computeTrackerCounts();
                 renderStageFilters();
                 renderStatusFilters();
                 updateFilterSummary();
-                resetTrackerPreview();
+                
+                // Only reset preview if not preserving state
+                if (!preserveState) {
+                    resetTrackerPreview();
+                }
                 
                 // Store image scale factor (from display image to original image)
                 imageScaleFactor = data.image_scale_factor || 1.0;
@@ -706,8 +784,11 @@
                 restoreSelectedTracker();
                 
                 // Load base image using fetch first to check for errors
-                document.getElementById('layoutContainer').innerHTML = 
-                    '<div class="loading">Loading image</div>';
+                // Only show loading if not preserving state
+                if (!preserveState) {
+                    document.getElementById('layoutContainer').innerHTML = 
+                        '<div class="loading">Loading image</div>';
+                }
                 
                 try {
                     const imageResponse = await fetch(layoutData.base_image);
@@ -730,16 +811,63 @@
                     img.onload = () => {
                         image = img; // Store reference
                         URL.revokeObjectURL(imageUrl); // Clean up
-                        setupCanvas(img);
-                        // Setup toggle listener after canvas is ready
-                        setTimeout(() => {
-                            const overlayToggle = document.getElementById('overlayToggle');
-                            if (overlayToggle) {
-                                // Remove existing listener if any
-                                overlayToggle.removeEventListener('change', handleOverlayToggle);
-                                overlayToggle.addEventListener('change', handleOverlayToggle);
+                        
+                        // If preserving state, update image but keep zoom/pan
+                        if (preserveState && canvas && canvasWrapper && ctx) {
+                            // Just update the canvas image and redraw
+                            // Need to recalculate canvas size if image dimensions changed
+                            const timelineContainer = document.getElementById('timelineContainer');
+                            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
+                                ? timelineContainer.offsetHeight : 0;
+                            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
+                            const containerWidth = document.getElementById('layoutContainer').clientWidth - 40;
+                            const containerHeight = Math.max(availableHeight, 400);
+                            
+                            const imgAspect = img.width / img.height;
+                            const containerAspect = containerWidth / containerHeight;
+                            
+                            let width, height;
+                            if (imgAspect > containerAspect) {
+                                width = containerWidth;
+                                height = containerWidth / imgAspect;
+                            } else {
+                                height = containerHeight;
+                                width = containerHeight * imgAspect;
                             }
-                        }, 100);
+                            
+                            if (width > containerWidth) {
+                                width = containerWidth;
+                                height = containerWidth / imgAspect;
+                            }
+                            if (height > containerHeight) {
+                                height = containerHeight;
+                                width = containerHeight * imgAspect;
+                            }
+                            
+                            // Only resize if dimensions changed
+                            if (canvas.width !== width || canvas.height !== height) {
+                                canvas.width = width;
+                                canvas.height = height;
+                                scaleX = img.width / width;
+                                scaleY = img.height / height;
+                            }
+                            
+                            ctx.clearRect(0, 0, canvas.width, canvas.height);
+                            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                            drawOverlays();
+                        } else {
+                            // Full setup (first load or forced reload)
+                            setupCanvas(img);
+                            // Setup toggle listener after canvas is ready
+                            setTimeout(() => {
+                                const overlayToggle = document.getElementById('overlayToggle');
+                                if (overlayToggle) {
+                                    // Remove existing listener if any
+                                    overlayToggle.removeEventListener('change', handleOverlayToggle);
+                                    overlayToggle.addEventListener('change', handleOverlayToggle);
+                                }
+                            }, 100);
+                        }
                     };
                     
                     img.onerror = (e) => {
@@ -769,6 +897,11 @@
         function setupCanvas(img) {
             const container = document.getElementById('layoutContainer');
             container.innerHTML = '';
+            
+            // Create wrapper for zoom/pan
+            canvasWrapper = document.createElement('div');
+            canvasWrapper.className = 'canvas-wrapper';
+            container.appendChild(canvasWrapper);
             
             canvas = document.createElement('canvas');
             ctx = canvas.getContext('2d');
@@ -820,10 +953,36 @@
             
             ctx.drawImage(img, 0, 0, width, height);
             canvas.id = 'layoutCanvas';
-            container.appendChild(canvas);
+            canvasWrapper.appendChild(canvas);
             
-            // Add click handler
-            canvas.addEventListener('click', handleClick);
+            // Reset zoom and pan
+            zoomLevel = 1.0;
+            panX = 0;
+            panY = 0;
+            updateCanvasTransform();
+            
+            // Setup zoom controls
+            setupZoomControls();
+            
+            // Setup panning
+            setupPanning();
+            
+            // Add click handlers
+            // Left click for selecting trackers
+            canvas.addEventListener('click', (e) => {
+                if (e.button === 0 || e.button === undefined) { // Left click or touch
+                    handleClick(e);
+                }
+            });
+            
+            // Right click for showing tracker view
+            canvas.addEventListener('contextmenu', (e) => {
+                e.preventDefault(); // Prevent default context menu
+                handleClick(e);
+            });
+            
+            // Show zoom controls
+            document.getElementById('zoomControls').style.display = 'flex';
             
             // Sync timeline container width with canvas width
             updateTimelineWidth();
@@ -833,6 +992,93 @@
             
             // Draw overlays after canvas is set up
             drawOverlays();
+        }
+        
+        function updateCanvasTransform() {
+            if (!canvasWrapper) return;
+            canvasWrapper.style.transform = `translate(${panX}px, ${panY}px) scale(${zoomLevel})`;
+        }
+        
+        function setupZoomControls() {
+            const zoomInBtn = document.getElementById('zoomInBtn');
+            const zoomOutBtn = document.getElementById('zoomOutBtn');
+            const zoomResetBtn = document.getElementById('zoomResetBtn');
+            
+            zoomInBtn.addEventListener('click', () => {
+                zoomLevel = Math.min(zoomLevel * 1.2, 5.0); // Max 5x zoom
+                updateCanvasTransform();
+            });
+            
+            zoomOutBtn.addEventListener('click', () => {
+                zoomLevel = Math.max(zoomLevel / 1.2, 0.5); // Min 0.5x zoom
+                updateCanvasTransform();
+            });
+            
+            zoomResetBtn.addEventListener('click', () => {
+                zoomLevel = 1.0;
+                panX = 0;
+                panY = 0;
+                updateCanvasTransform();
+            });
+            
+            // Mouse wheel zoom
+            const container = document.getElementById('layoutContainer');
+            container.addEventListener('wheel', (e) => {
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                    const oldZoom = zoomLevel;
+                    zoomLevel = Math.max(0.5, Math.min(5.0, zoomLevel * delta));
+                    
+                    // Zoom towards mouse position
+                    if (canvas) {
+                        const rect = container.getBoundingClientRect();
+                        const mouseX = e.clientX - rect.left;
+                        const mouseY = e.clientY - rect.top;
+                        
+                        // Adjust pan to zoom towards mouse
+                        const zoomChange = zoomLevel / oldZoom;
+                        panX = mouseX - (mouseX - panX) * zoomChange;
+                        panY = mouseY - (mouseY - panY) * zoomChange;
+                    }
+                    
+                    updateCanvasTransform();
+                }
+            }, { passive: false });
+        }
+        
+        function setupPanning() {
+            // Panning removed - only keeping zoom functionality
+            // Touch support for mobile - pinch zoom only
+            let touchStartDistance = 0;
+            let touchStartZoom = 1.0;
+            
+            canvas.addEventListener('touchstart', (e) => {
+                if (e.touches.length === 2) {
+                    // Pinch zoom
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    touchStartDistance = Math.hypot(
+                        touch2.clientX - touch1.clientX,
+                        touch2.clientY - touch1.clientY
+                    );
+                    touchStartZoom = zoomLevel;
+                }
+            }, { passive: false });
+            
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                if (e.touches.length === 2) {
+                    const touch1 = e.touches[0];
+                    const touch2 = e.touches[1];
+                    const distance = Math.hypot(
+                        touch2.clientX - touch1.clientX,
+                        touch2.clientY - touch1.clientY
+                    );
+                    zoomLevel = Math.max(0.5, Math.min(5.0, touchStartZoom * (distance / touchStartDistance)));
+                    updateCanvasTransform();
+                }
+            }, { passive: false });
         }
         
         function updateTimelineWidth() {
@@ -978,7 +1224,7 @@
             return colors[status?.toLowerCase().replace(/\s+/g, '_')] || '#666';
         }
         
-        function drawStageRectangle(ctx, coords, stage) {
+        function drawStageRectangle(ctx, coords, stage, isSelected = false) {
             if (!coords) return;
             
             // Scale down the rectangle size (make it smaller)
@@ -988,13 +1234,16 @@
             const scaledX = coords.centerX - scaledWidth / 2;
             const scaledY = coords.centerY - scaledHeight / 2;
             
-            const color = getStageColorRGB(stage);
+            // If selected, use yellow color; otherwise use stage color
+            const color = isSelected ? '#FFFF00' : getStageColorRGB(stage);
+            
             ctx.fillStyle = color;
             ctx.globalAlpha = 0.3;
             ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
             ctx.globalAlpha = 1.0;
             ctx.strokeStyle = color;
             ctx.lineWidth = 1.5;
+            ctx.setLineDash([]);
             ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
             
             // Store scaled rectangle info for dot positioning
@@ -1062,15 +1311,31 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
             
-            // Only draw if toggle is on
+            // Get overlay toggle state
             const overlayToggle = document.getElementById('overlayToggle');
-            if (!overlayToggle) {
-                console.log('drawOverlays: Toggle not found');
-                return;
+            const overlaysEnabled = overlayToggle && overlayToggle.checked;
+            
+            // Always draw selected tracker highlight, even if overlays are off
+            if (selectedTrackerId && layoutData.tracker_info && layoutData.boundaries) {
+                const info = layoutData.tracker_info[selectedTrackerId];
+                const boundary = layoutData.boundaries[selectedTrackerId];
+                
+                if (info && boundary) {
+                    const canvasCoords = latLonToCanvas(boundary, layoutData);
+                    if (canvasCoords) {
+                        // Draw selected tracker in yellow (always visible)
+                        drawStageRectangle(ctx, canvasCoords, info.stage, true);
+                        // Draw status circle if overlays are enabled
+                        if (overlaysEnabled) {
+                            drawStatusCircle(ctx, canvasCoords, info.status);
+                        }
+                    }
+                }
             }
             
-            if (!overlayToggle.checked) {
-                console.log('drawOverlays: Toggle is off');
+            // Only draw other overlays if toggle is on
+            if (!overlaysEnabled) {
+                console.log('drawOverlays: Toggle is off, only showing selected tracker');
                 return;
             }
             
@@ -1085,6 +1350,11 @@
             
             // Iterate through trackers and draw based on filters
             Object.keys(layoutData.tracker_info || {}).forEach(trackerId => {
+                // Skip selected tracker (already drawn above)
+                if (trackerId === selectedTrackerId) {
+                    return;
+                }
+                
                 const info = layoutData.tracker_info[trackerId];
                 const boundary = layoutData.boundaries?.[trackerId];
                 
@@ -1114,8 +1384,8 @@
                     return;
                 }
                 
-                // Draw rectangle for stage (this also stores scaled rect info in canvasCoords)
-                drawStageRectangle(ctx, canvasCoords, info.stage);
+                // Draw rectangle for stage (not selected, so use stage color)
+                drawStageRectangle(ctx, canvasCoords, info.stage, false);
                 
                 // Draw circle for status (positioned above the scaled rectangle)
                 drawStatusCircle(ctx, canvasCoords, info.status);
@@ -1126,10 +1396,23 @@
         }
         
         async function handleClick(event) {
-            const rect = canvas.getBoundingClientRect();
+            // Get the canvas wrapper's bounding rect (this includes the transform)
+            const wrapperRect = canvasWrapper.getBoundingClientRect();
+            
+            // Get click position relative to the wrapper (transformed position)
+            const clickX = event.clientX - wrapperRect.left;
+            const clickY = event.clientY - wrapperRect.top;
+            
+            // Reverse the transform to get actual canvas coordinates
+            // The transform is: translate(panX, panY) scale(zoomLevel)
+            // Transform origin is at (0, 0) of the wrapper
+            // So we reverse: (click - pan) / zoom
+            const canvasX = (clickX - panX) / zoomLevel;
+            const canvasY = (clickY - panY) / zoomLevel;
+            
             // Get click coordinates in displayed image pixels
-            const displayX = (event.clientX - rect.left) * scaleX;
-            const displayY = (event.clientY - rect.top) * scaleY;
+            const displayX = canvasX * scaleX;
+            const displayY = canvasY * scaleY;
             
             // Scale from display image coordinates to original image coordinates
             const originalX = displayX * imageScaleFactor;
@@ -1140,11 +1423,14 @@
             const tifY = originalY;
             
             console.log('Click coordinates:', {
-                'canvas': `${Math.round(event.clientX - rect.left)}, ${Math.round(event.clientY - rect.top)}`,
+                'wrapper_click': `${Math.round(clickX)}, ${Math.round(clickY)}`,
+                'canvas_coords': `${Math.round(canvasX)}, ${Math.round(canvasY)}`,
                 'display_image': `${Math.round(displayX)}, ${Math.round(displayY)}`,
                 'original_image': `${Math.round(originalX)}, ${Math.round(originalY)}`,
                 'tif_coordinates': `${Math.round(tifX)}, ${Math.round(tifY)}`,
-                'scale_factor': imageScaleFactor
+                'scale_factor': imageScaleFactor,
+                'zoom': zoomLevel,
+                'pan': `${panX}, ${panY}`
             });
             
             try {
@@ -1274,7 +1560,7 @@
             }
             
             if (layoutData && layoutData.tracker_info && layoutData.tracker_info[selectedTrackerId]) {
-                displayTracker(selectedTrackerId, true);
+                displayTracker(selectedTrackerId);
             } else {
                 const previewDiv = document.getElementById('trackerPreview');
                 if (previewDiv) {
@@ -1474,6 +1760,9 @@
             
             console.log('displayTracker: Tracker info', info);
             
+            // Redraw overlays to show highlight
+            drawOverlays();
+            
             showPreviewLoading(trackerId, info);
             
             // Load tracker image
@@ -1516,7 +1805,15 @@
         // Handle window resize
         window.addEventListener('resize', () => {
             if (image && canvas) {
+                // Preserve zoom/pan state on resize
+                const savedZoom = zoomLevel;
+                const savedPanX = panX;
+                const savedPanY = panY;
                 setupCanvas(image);
+                zoomLevel = savedZoom;
+                panX = savedPanX;
+                panY = savedPanY;
+                updateCanvasTransform();
             } else {
                 updateTimelinePosition();
             }
