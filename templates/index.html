@@ -636,7 +636,6 @@
             <div class="view-tabs">
                 <button class="view-tab active" data-view="map">Map</button>
                 <button class="view-tab" data-view="table">Table</button>
-                <button class="view-tab" data-view="pie">Pie</button>
                 <button class="view-tab" data-view="charts">Charts</button>
                 <button class="view-tab" data-view="settings">Settings</button>
             </div>
@@ -673,9 +672,9 @@
             <!-- Table View -->
             <div id="tableView" class="view-panel">
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
-                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Daily Completions by Stage</h2>
+                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Stage Progress by Date</h2>
                     <p id="tableDescription" style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Each row shows additional trackers completed since the previous drone flight date (no interpolation on missing days).
+                        Each row shows how many trackers are in each main construction stage on that date (summing to the total number of trackers).
                     </p>
                     <table id="dailyTable" style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
@@ -694,25 +693,21 @@
                 </div>
             </div>
 
-            <!-- Pie View -->
-            <div id="pieView" class="view-panel">
-                <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
-                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Stage Distribution (Pie Chart)</h2>
-                    <p style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Select a date to view how many trackers are in each stage on that day.
-                    </p>
-                    <div style="margin-bottom:6px;">
-                        <label for="dailyPieDateSelect" style="font-size:12px; color:#333; margin-right:4px;">Date:</label>
-                        <select id="dailyPieDateSelect" style="font-size:12px; padding:2px 6px; margin-right:8px;"></select>
-                        <span id="dailyPieTotal" style="font-size:12px; color:#014059; font-weight:600;"></span>
-                    </div>
-                    <div id="dailyPieChart" style="width:100%; height:380px;"></div>
-                </div>
-            </div>
-
             <!-- Charts View -->
             <div id="chartsView" class="view-panel">
                 <div style="flex:1; display:flex; flex-direction:column; gap:12px;">
+                    <div style="background:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; display:flex; flex-direction:column; gap:6px;">
+                        <h2 style="font-size:16px; color:#014059; margin-bottom:4px;">Stage Distribution (Pie Chart)</h2>
+                        <p style="font-size:12px; color:#666; margin-bottom:4px;">
+                            Select a date to view how many trackers are in each stage on that day.
+                        </p>
+                        <div style="margin-bottom:6px;">
+                            <label for="dailyPieDateSelect" style="font-size:12px; color:#333; margin-right:4px;">Date:</label>
+                            <select id="dailyPieDateSelect" style="font-size:12px; padding:2px 6px; margin-right:8px;"></select>
+                            <span id="dailyPieTotal" style="font-size:12px; color:#014059; font-weight:600;"></span>
+                        </div>
+                        <div id="dailyPieChart" style="width:100%; height:260px;"></div>
+                    </div>
                     <div style="background:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:8px; display:flex; flex-direction:column; gap:6px;">
                         <div id="progressStageSelector" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px;"></div>
                         <div id="progressChart" style="flex:1; min-height:220px;"></div>
@@ -825,7 +820,9 @@
 
         // Analytics data
         let allDateSummaries = {}; // {dateStr: {stageStatusCounts, totalTrackers}}
-        let workingDaySeries = []; // [{date, perStage:{}, total}]
+        let workingDaySeries = []; // [{date, perStage:{}, total}] - for productivity
+        let snapshotSeries = [];   // [{date, perStage:{}, total}] - flight-date snapshots
+        let tableSeries = [];      // [{date, perStage:{}, total}] - snapshots plus in-between dates
 
         // Manpower configuration (hardcoded initial values, editable in UI)
         // Keys are YYYY-MM-DD (display format from /api/dates.display)
@@ -910,7 +907,6 @@
             const panels = {
                 map: document.getElementById('mapView'),
                 table: document.getElementById('tableView'),
-                pie: document.getElementById('pieView'),
                 charts: document.getElementById('chartsView'),
                 settings: document.getElementById('settingsView')
             };
@@ -924,13 +920,12 @@
                         el.classList.toggle('active', key === view);
                     });
 
-                    // Resize charts when charts or pie view is activated
+                    // Resize charts when charts view is activated
                     if (view === 'charts') {
                         if (window.progressChartInstance) window.progressChartInstance.resize();
                         if (window.manpowerChartInstance) window.manpowerChartInstance.resize();
                         if (window.productivityMhMwChartInstance) window.productivityMhMwChartInstance.resize();
                         if (window.productivityMhModChartInstance) window.productivityMhModChartInstance.resize();
-                    } else if (view === 'pie') {
                         if (window.dailyPieChartInstance) window.dailyPieChartInstance.resize();
                     }
                 });
@@ -982,6 +977,67 @@
 
                 allDateSummaries[d.display] = summary;
             }
+
+            // Build snapshot series for table: how many trackers are in each stage on each flight date
+            snapshotSeries = [];
+            availableDates.forEach(d => {
+                const disp = d.display;
+                const sum = allDateSummaries[disp];
+                if (!sum) return;
+
+                const row = {
+                    date: disp,
+                    perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
+                    total: sum.totalTrackers || 0
+                };
+
+                stageDefinitions.forEach(stage => {
+                    const countsByStatus = sum.stageStatusCounts[stage.key] || {};
+                    let stageTotal = 0;
+                    statusDefinitions.forEach(st => {
+                        stageTotal += countsByStatus[st.key] || 0;
+                    });
+                    row.perStage[stage.key] = stageTotal;
+                });
+
+                snapshotSeries.push(row);
+            });
+
+            // Build tableSeries over all calendar days between first and last flight,
+            // filling in zeros for dates without flights.
+            tableSeries = [];
+            if (snapshotSeries.length > 0) {
+                const oneDayMs = 24 * 60 * 60 * 1000;
+
+                function parseDate(str) {
+                    return new Date(str + 'T00:00:00');
+                }
+
+                const firstDateStr = snapshotSeries[0].date;
+                const lastDateStr = snapshotSeries[snapshotSeries.length - 1].date;
+                const firstDate = parseDate(firstDateStr);
+                const lastDate = parseDate(lastDateStr);
+
+                const snapshotMap = {};
+                snapshotSeries.forEach(r => {
+                    snapshotMap[r.date] = r;
+                });
+
+                for (let t = firstDate.getTime(); t <= lastDate.getTime(); t += oneDayMs) {
+                    const d = new Date(t);
+                    const disp = d.toISOString().slice(0, 10);
+                    const existing = snapshotMap[disp];
+                    if (existing) {
+                        tableSeries.push(existing);
+                    } else {
+                        tableSeries.push({
+                            date: disp,
+                            perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
+                            total: 0
+                        });
+                    }
+                }
+            }
         }
 
         function buildWorkingDaySeries() {
@@ -1003,27 +1059,69 @@
                 });
             });
 
-            // Build series only for the actual drone flight dates.
-            // Each row shows the incremental completions since the previous flight.
-            workingDaySeries = [];
-            for (let i = 0; i < availableDates.length; i++) {
-                const disp = availableDates[i].display;
-                const row = {
-                    date: disp,
-                    perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
-                    total: 0
-                };
+            // Helper to parse YYYY-MM-DD into Date (local)
+            function parseDate(str) {
+                return new Date(str + 'T00:00:00');
+            }
 
+            function isWeekend(date) {
+                const day = date.getDay(); // 0=Sun, 6=Sat
+                return day === 0 || day === 6;
+            }
+
+            // Build series over all working days between flights (Mon–Fri),
+            // distributing completions evenly across working days.
+            workingDaySeries = [];
+
+            for (let i = 0; i < availableDates.length; i++) {
+                if (i === 0) continue; // no previous flight to interpolate from
+
+                const prevDisp = availableDates[i - 1].display;
+                const curDisp = availableDates[i].display;
+
+                const prevDate = parseDate(prevDisp);
+                const curDate = parseDate(curDisp);
+
+                // Collect all working days between previous and current flight (exclusive prev, inclusive current)
+                const workingDates = [];
+                const oneDayMs = 24 * 60 * 60 * 1000;
+                for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
+                    const d = new Date(t);
+                    if (!isWeekend(d)) {
+                        workingDates.push(new Date(d));
+                    }
+                }
+
+                if (!workingDates.length) {
+                    continue;
+                }
+
+                // Compute total delta between flights per stage
+                const perStageDelta = {};
                 stageDefinitions.forEach(s => {
-                    const cur = completedSnapshot[disp]?.[s.key] || 0;
-                    const prevDisp = i > 0 ? availableDates[i - 1].display : null;
-                    const prev = prevDisp ? (completedSnapshot[prevDisp]?.[s.key] || 0) : 0;
+                    const cur = completedSnapshot[curDisp]?.[s.key] || 0;
+                    const prev = completedSnapshot[prevDisp]?.[s.key] || 0;
                     const delta = Math.max(0, cur - prev);
-                    row.perStage[s.key] = delta;
+                    perStageDelta[s.key] = delta / workingDates.length;
                 });
 
-                row.total = stageDefinitions.reduce((acc, s) => acc + (row.perStage[s.key] || 0), 0);
-                workingDaySeries.push(row);
+                // Create one row per working day
+                workingDates.forEach(d => {
+                    const dispDate = d.toISOString().slice(0, 10);
+                    const row = {
+                        date: dispDate,
+                        perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
+                        total: 0
+                    };
+
+                    stageDefinitions.forEach(s => {
+                        const v = perStageDelta[s.key] || 0;
+                        row.perStage[s.key] = v;
+                        row.total += v;
+                    });
+
+                    workingDaySeries.push(row);
+                });
             }
         }
 
@@ -1162,8 +1260,11 @@
                     const mwCompleted = completions * MW_PER_TRACKER;
                     const modulesCompleted = completions * MODULES_PER_TRACKER;
 
-                    const mhPerMw = mwCompleted > 0 ? mh / mwCompleted : 0;
-                    const mhPerMod = modulesCompleted > 0 ? mh / modulesCompleted : 0;
+                    const mhPerMwRaw = mwCompleted > 0 ? mh / mwCompleted : 0;
+                    const mhPerModRaw = modulesCompleted > 0 ? mh / modulesCompleted : 0;
+
+                    const mhPerMw = Math.round(mhPerMwRaw);
+                    const mhPerMod = Math.round(mhPerModRaw);
 
                     mhMw.push(mhPerMw);
                     mhMod.push(mhPerMod);
@@ -1298,6 +1399,8 @@
             const summary = allDateSummaries[selectedDisp];
             if (!summary) {
                 window.dailyPieChartInstance.clear();
+                const totalLabel = document.getElementById('dailyPieTotal');
+                if (totalLabel) totalLabel.textContent = '';
                 return;
             }
 
@@ -1338,15 +1441,15 @@
             if (!body) return;
             body.innerHTML = '';
 
-            workingDaySeries.forEach(row => {
+            tableSeries.forEach(row => {
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.pile.toFixed(2)}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.torque_tube.toFixed(2)}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.module_rails.toFixed(2)}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.solar_panel.toFixed(2)}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.total.toFixed(2)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.pile}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.torque_tube}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.module_rails}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.solar_panel}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.total}</td>
                 `;
                 body.appendChild(tr);
             });
