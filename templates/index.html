@@ -62,6 +62,40 @@
             box-shadow: -2px 0 4px rgba(0,0,0,0.05);
         }
         
+        .view-tabs {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+        
+        .view-tab {
+            padding: 6px 12px;
+            border-radius: 16px;
+            border: 1px solid #ccc;
+            background: #f5f5f5;
+            font-size: 13px;
+            cursor: pointer;
+            color: #014059;
+            transition: all 0.15s ease;
+        }
+        
+        .view-tab.active {
+            background: #014059;
+            color: #fff;
+            border-color: #014059;
+        }
+        
+        .view-panel {
+            width: 100%;
+            height: 100%;
+            display: none;
+            flex-direction: column;
+        }
+        
+        .view-panel.active {
+            display: flex;
+        }
+        
         #layoutCanvas {
             max-width: 100%;
             max-height: calc(100vh - 100px);
@@ -228,7 +262,7 @@
         
         .timeline-container {
             position: absolute;
-            bottom: 0;
+            bottom: -12px; /* Place just below the layout image */
             left: 0;
             right: 0;
             margin: 0;
@@ -289,10 +323,25 @@
         
         .timeline-current {
             text-align: center;
-            margin-top: 1px;
+            margin-top: 3px;
             font-weight: bold;
             color: #014059;
             font-size: 11px;
+        }
+
+        .timeline-dots {
+            display: flex;
+            justify-content: space-between;
+            width: 100%;
+            padding: 0 4px;
+            margin-top: 4px;
+        }
+
+        .timeline-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #014059;
         }
         
         .overlay-controls {
@@ -356,7 +405,7 @@
             flex: 1;
             min-height: 0;
             align-items: flex-start;
-            padding-bottom: 50px; /* Space for timeline at bottom */
+            padding-bottom: 80px; /* Extra space for timeline below the layout */
         }
         
         .layout-view {
@@ -582,31 +631,132 @@
         <h1>Construction Progress Viewer</h1>
     </div>
     
-        <div class="container">
+    <div class="container">
         <div class="main-view">
-            <div class="layout-wrapper">
-                <div class="layout-view">
-                    <div id="layoutContainer">
-                        <div class="loading">Loading layout</div>
+            <div class="view-tabs">
+                <button class="view-tab active" data-view="map">Map</button>
+                <button class="view-tab" data-view="table">Table</button>
+                <button class="view-tab" data-view="pie">Pie</button>
+                <button class="view-tab" data-view="charts">Charts</button>
+                <button class="view-tab" data-view="settings">Settings</button>
+            </div>
+
+            <!-- Map View -->
+            <div id="mapView" class="view-panel active">
+                <div class="layout-wrapper">
+                    <div class="layout-view">
+                        <div id="layoutContainer">
+                            <div class="loading">Loading layout</div>
+                        </div>
+                        <div class="zoom-controls" id="zoomControls" style="display: none;">
+                            <button class="zoom-btn" id="zoomInBtn" title="Zoom In">+</button>
+                            <button class="zoom-btn" id="zoomOutBtn" title="Zoom Out">−</button>
+                            <button class="zoom-btn zoom-reset" id="zoomResetBtn" title="Reset Zoom">Reset</button>
+                        </div>
                     </div>
-                    <div class="zoom-controls" id="zoomControls" style="display: none;">
-                        <button class="zoom-btn" id="zoomInBtn" title="Zoom In">+</button>
-                        <button class="zoom-btn" id="zoomOutBtn" title="Zoom Out">−</button>
-                        <button class="zoom-btn zoom-reset" id="zoomResetBtn" title="Reset Zoom">Reset</button>
+                    <div class="tracker-preview" id="trackerPreview">
+                        <p class="tracker-preview-placeholder">Select a tracker to view its image here.</p>
                     </div>
                 </div>
-                <div class="tracker-preview" id="trackerPreview">
-                    <p class="tracker-preview-placeholder">Select a tracker to view its image here.</p>
+                <div class="timeline-container" id="timelineContainer" style="display: none;">
+                    <label for="timelineSlider">Timeline:</label>
+                    <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="1" value="0" step="1">
+                    <div class="timeline-labels">
+                        <span id="timelineStart"></span>
+                        <span id="timelineEnd"></span>
+                    </div>
+                    <div class="timeline-current" id="timelineCurrent"></div>
+                    <div class="timeline-dots" id="timelineDots"></div>
                 </div>
             </div>
-            <div class="timeline-container" id="timelineContainer" style="display: none;">
-                <label for="timelineSlider">Timeline:</label>
-                <input type="range" id="timelineSlider" class="timeline-slider" min="0" max="1" value="0" step="1">
-                <div class="timeline-labels">
-                    <span id="timelineStart"></span>
-                    <span id="timelineEnd"></span>
+
+            <!-- Table View -->
+            <div id="tableView" class="view-panel">
+                <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
+                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Daily Completions by Stage</h2>
+                    <p id="tableDescription" style="font-size:12px; color:#666; margin-bottom:8px;">
+                        Each row shows additional trackers completed since the previous drone flight date (no interpolation on missing days).
+                    </p>
+                    <table id="dailyTable" style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Total</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dailyTableBody">
+                        </tbody>
+                    </table>
                 </div>
-                <div class="timeline-current" id="timelineCurrent"></div>
+            </div>
+
+            <!-- Pie View -->
+            <div id="pieView" class="view-panel">
+                <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
+                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Stage Distribution (Pie Chart)</h2>
+                    <p style="font-size:12px; color:#666; margin-bottom:8px;">
+                        Select a date to view how many trackers are in each stage on that day.
+                    </p>
+                    <div style="margin-bottom:6px;">
+                        <label for="dailyPieDateSelect" style="font-size:12px; color:#333; margin-right:4px;">Date:</label>
+                        <select id="dailyPieDateSelect" style="font-size:12px; padding:2px 6px; margin-right:8px;"></select>
+                        <span id="dailyPieTotal" style="font-size:12px; color:#014059; font-weight:600;"></span>
+                    </div>
+                    <div id="dailyPieChart" style="width:100%; height:380px;"></div>
+                </div>
+            </div>
+
+            <!-- Charts View -->
+            <div id="chartsView" class="view-panel">
+                <div style="flex:1; display:flex; flex-direction:column; gap:12px;">
+                    <div style="background:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:8px; display:flex; flex-direction:column; gap:6px;">
+                        <div id="progressStageSelector" style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:4px;"></div>
+                        <div id="progressChart" style="flex:1; min-height:220px;"></div>
+                    </div>
+                    <div id="manpowerChart" style="flex:1; min-height:220px; background:#fff; border-radius:8px; border:1px solid #e0e0e0;"></div>
+                    <div id="productivityMhMwChart" style="flex:1; min-height:220px; background:#fff; border-radius:8px; border:1px solid #e0e0e0;"></div>
+                    <div id="productivityMhModChart" style="flex:1; min-height:220px; background:#fff; border-radius:8px; border:1px solid #e0e0e0;"></div>
+                </div>
+            </div>
+
+            <!-- Settings / Manpower View -->
+            <div id="settingsView" class="view-panel">
+                <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
+                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Manpower Configuration</h2>
+                    <p style="font-size:12px; color:#666; margin-bottom:8px;">
+                        Hardcoded initial values for number of people per stage per day. Edits here affect charts for this session only.
+                    </p>
+                    <div style="margin-bottom:10px; padding:8px; background:#f9f9f9; border-radius:6px; border:1px solid #e0e0e0;">
+                        <div style="font-size:13px; color:#014059; font-weight:600; margin-bottom:4px;">Global Parameters</div>
+                        <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#333;">
+                            <label>
+                                MW per tracker:
+                                <input type="number" id="mwPerTrackerInput" step="0.001" min="0" value="0.01" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                            </label>
+                            <label>
+                                Modules per tracker:
+                                <input type="number" id="modulesPerTrackerInput" step="1" min="0" value="28" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                            </label>
+                        </div>
+                    </div>
+                    <table id="manpowerTable" style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manpowerTableBody">
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
         
@@ -636,6 +786,8 @@
             </details>
         </div>
     </div>
+    <!-- ECharts for charts -->
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
     
     <script>
         let currentDate = null;
@@ -670,10 +822,26 @@
         let totalTrackers = 0;
         let selectedStage = null;
         let selectedStatus = null;
+
+        // Analytics data
+        let allDateSummaries = {}; // {dateStr: {stageStatusCounts, totalTrackers}}
+        let workingDaySeries = []; // [{date, perStage:{}, total}]
+
+        // Manpower configuration (hardcoded initial values, editable in UI)
+        // Keys are YYYY-MM-DD (display format from /api/dates.display)
+        const HOURS_PER_DAY = 10; // assumed working hours per person per day
+        let MW_PER_TRACKER = 0.01; // editable in Settings view
+        let MODULES_PER_TRACKER = 28; // editable in Settings view
+        let manpowerConfig = {};
+
+        // Selected stage for progress chart (one of stageDefinitions keys)
+        let progressSelectedStageKey = 'pile';
         
         // Initialize
         async function init() {
             try {
+                setupViewTabs();
+
                 // Get available dates
                 const response = await fetch('/api/dates');
                 const data = await response.json();
@@ -690,6 +858,17 @@
                 }
                 
                 availableDates = data.dates;
+
+                // Initialize manpower config with default values for each date (can be edited later)
+                initializeManpowerConfig();
+
+                // Precompute summaries for all dates (for charts/table)
+                await computeAllDateSummaries();
+                buildWorkingDaySeries();
+                renderManpowerTable();
+                renderDailyTable();
+                initializeCharts();
+                initializeDailyPieChart();
                 
                 // Setup timeline slider (show if more than one date)
                 const timelineContainer = document.getElementById('timelineContainer');
@@ -711,6 +890,9 @@
                         document.getElementById('timelineCurrent').textContent = selectedDate.display;
                         loadLayout(selectedDate.date, true); // Preserve state when switching dates
                     });
+
+                    // Render dots to indicate available dates
+                    renderTimelineDots();
                 } else {
                     timelineContainer.style.display = 'none';
                 }
@@ -723,6 +905,453 @@
             }
         }
         
+        function setupViewTabs() {
+            const tabs = document.querySelectorAll('.view-tab');
+            const panels = {
+                map: document.getElementById('mapView'),
+                table: document.getElementById('tableView'),
+                pie: document.getElementById('pieView'),
+                charts: document.getElementById('chartsView'),
+                settings: document.getElementById('settingsView')
+            };
+
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const view = tab.dataset.view;
+                    tabs.forEach(t => t.classList.toggle('active', t === tab));
+                    Object.entries(panels).forEach(([key, el]) => {
+                        if (!el) return;
+                        el.classList.toggle('active', key === view);
+                    });
+
+                    // Resize charts when charts or pie view is activated
+                    if (view === 'charts') {
+                        if (window.progressChartInstance) window.progressChartInstance.resize();
+                        if (window.manpowerChartInstance) window.manpowerChartInstance.resize();
+                        if (window.productivityMhMwChartInstance) window.productivityMhMwChartInstance.resize();
+                        if (window.productivityMhModChartInstance) window.productivityMhModChartInstance.resize();
+                    } else if (view === 'pie') {
+                        if (window.dailyPieChartInstance) window.dailyPieChartInstance.resize();
+                    }
+                });
+            });
+        }
+
+        function initializeManpowerConfig() {
+            manpowerConfig = {};
+            availableDates.forEach(d => {
+                // Use display date (YYYY-MM-DD) as key
+                manpowerConfig[d.display] = {
+                    pile: 10,
+                    torque_tube: 8,
+                    module_rails: 6,
+                    solar_panel: 12
+                };
+            });
+        }
+
+        async function computeAllDateSummaries() {
+            allDateSummaries = {};
+            for (const d of availableDates) {
+                const resp = await fetch(`/api/layout/${d.date}`);
+                const ld = await resp.json();
+                if (!ld || ld.error) continue;
+
+                const summary = {
+                    stageStatusCounts: {},
+                    totalTrackers: Object.keys(ld.tracker_info || {}).length
+                };
+
+                Object.values(ld.tracker_info || {}).forEach(info => {
+                    const stageKey = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
+                    const statusKey = (info.status || '').toLowerCase().replace(/\s+/g, '_');
+                    if (!summary.stageStatusCounts[stageKey]) summary.stageStatusCounts[stageKey] = {};
+                    if (!summary.stageStatusCounts[stageKey][statusKey]) summary.stageStatusCounts[stageKey][statusKey] = 0;
+                    summary.stageStatusCounts[stageKey][statusKey] += 1;
+                });
+
+                // Ensure all combinations exist
+                stageDefinitions.forEach(s => {
+                    if (!summary.stageStatusCounts[s.key]) summary.stageStatusCounts[s.key] = {};
+                    statusDefinitions.forEach(st => {
+                        if (!summary.stageStatusCounts[s.key][st.key]) {
+                            summary.stageStatusCounts[s.key][st.key] = 0;
+                        }
+                    });
+                });
+
+                allDateSummaries[d.display] = summary;
+            }
+        }
+
+        function buildWorkingDaySeries() {
+            if (!availableDates.length) {
+                workingDaySeries = [];
+                return;
+            }
+
+            // Precompute completed counts per date and stage (snapshot at each drone flight date)
+            const completedSnapshot = {}; // {displayDate: {stage: completedCount}}
+            availableDates.forEach(d => {
+                const disp = d.display;
+                const sum = allDateSummaries[disp];
+                completedSnapshot[disp] = {};
+                stageDefinitions.forEach(s => {
+                    completedSnapshot[disp][s.key] = sum
+                        ? (sum.stageStatusCounts[s.key]?.completed || 0)
+                        : 0;
+                });
+            });
+
+            // Build series only for the actual drone flight dates.
+            // Each row shows the incremental completions since the previous flight.
+            workingDaySeries = [];
+            for (let i = 0; i < availableDates.length; i++) {
+                const disp = availableDates[i].display;
+                const row = {
+                    date: disp,
+                    perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
+                    total: 0
+                };
+
+                stageDefinitions.forEach(s => {
+                    const cur = completedSnapshot[disp]?.[s.key] || 0;
+                    const prevDisp = i > 0 ? availableDates[i - 1].display : null;
+                    const prev = prevDisp ? (completedSnapshot[prevDisp]?.[s.key] || 0) : 0;
+                    const delta = Math.max(0, cur - prev);
+                    row.perStage[s.key] = delta;
+                });
+
+                row.total = stageDefinitions.reduce((acc, s) => acc + (row.perStage[s.key] || 0), 0);
+                workingDaySeries.push(row);
+            }
+        }
+
+        // ---- Charts (ECharts) ----
+
+        function initializeCharts() {
+            if (typeof echarts === 'undefined') return;
+
+            const progressEl = document.getElementById('progressChart');
+            const manpowerEl = document.getElementById('manpowerChart');
+            const productivityMhMwEl = document.getElementById('productivityMhMwChart');
+            const productivityMhModEl = document.getElementById('productivityMhModChart');
+            if (!progressEl || !manpowerEl || !productivityMhMwEl || !productivityMhModEl) return;
+
+            window.progressChartInstance = echarts.init(progressEl);
+            window.manpowerChartInstance = echarts.init(manpowerEl);
+            window.productivityMhMwChartInstance = echarts.init(productivityMhMwEl);
+            window.productivityMhModChartInstance = echarts.init(productivityMhModEl);
+
+            setupProgressStageSelector();
+            updateProgressChart();
+            updateManpowerChart();
+            updateProductivityChart();
+        }
+        
+        function setupProgressStageSelector() {
+            const container = document.getElementById('progressStageSelector');
+            if (!container) return;
+            container.innerHTML = '';
+
+            stageDefinitions.forEach(stage => {
+                const btn = document.createElement('button');
+                btn.textContent = stage.label;
+                btn.style.padding = '4px 10px';
+                btn.style.borderRadius = '12px';
+                btn.style.border = '1px solid #ccc';
+                btn.style.background = progressSelectedStageKey === stage.key ? '#014059' : '#f5f5f5';
+                btn.style.color = progressSelectedStageKey === stage.key ? '#fff' : '#014059';
+                btn.style.fontSize = '11px';
+                btn.style.cursor = 'pointer';
+                btn.style.transition = 'all 0.15s ease';
+                btn.addEventListener('click', () => {
+                    progressSelectedStageKey = stage.key;
+                    setupProgressStageSelector(); // refresh styles
+                    updateProgressChart();
+                });
+                container.appendChild(btn);
+            });
+        }
+
+        function updateProgressChart() {
+            if (!window.progressChartInstance || !availableDates.length) return;
+
+            const selectedStage = progressSelectedStageKey || 'pile';
+            const stageDef = stageDefinitions.find(s => s.key === selectedStage) || stageDefinitions[0];
+
+            const xDates = availableDates.map(d => d.display);
+
+            // Build three series: one per status, for the selected stage only
+            const series = statusDefinitions.map(status => {
+                const data = xDates.map(disp => {
+                    const sum = allDateSummaries[disp];
+                    if (!sum) return 0;
+                    return sum.stageStatusCounts[selectedStage]?.[status.key] || 0;
+                });
+                return {
+                    name: status.label,
+                    type: 'bar',
+                    stack: stageDef.label,
+                    emphasis: { focus: 'series' },
+                    data
+                };
+            });
+
+            const option = {
+                title: { text: `Progress for ${stageDef.label}`, left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                legend: { top: 24 },
+                grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates },
+                yAxis: { type: 'value', name: '# Trackers' },
+                series
+            };
+
+            window.progressChartInstance.setOption(option);
+        }
+
+        function updateManpowerChart() {
+            if (!window.manpowerChartInstance || !availableDates.length) return;
+
+            const xDates = Object.keys(manpowerConfig).sort();
+            const series = [];
+
+            stageDefinitions.forEach(stage => {
+                series.push({
+                    name: stage.label,
+                    type: 'bar',
+                    stack: 'manpower',
+                    emphasis: { focus: 'series' },
+                    data: xDates.map(d => (manpowerConfig[d]?.[stage.key] ?? 0))
+                });
+            });
+
+            const option = {
+                title: { text: 'Manpower by Stage', left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                legend: { top: 24 },
+                grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates },
+                yAxis: { type: 'value', name: '# People' },
+                series
+            };
+
+            window.manpowerChartInstance.setOption(option);
+        }
+
+        function updateProductivityChart() {
+            if (!window.productivityMhMwChartInstance || !window.productivityMhModChartInstance || !workingDaySeries.length) return;
+
+            const xDates = workingDaySeries.map(r => r.date);
+
+            // For each stage, compute MH/MW and MH/mod per day
+            const mhMwSeries = [];
+            const mhModSeries = [];
+
+            stageDefinitions.forEach(stage => {
+                const mhMw = [];
+                const mhMod = [];
+
+                xDates.forEach(dateStr => {
+                    const manpower = manpowerConfig[dateStr] || {};
+                    const people = manpower[stage.key] ?? 0;
+                    const mh = people * HOURS_PER_DAY;
+
+                    const completions = (workingDaySeries.find(r => r.date === dateStr)?.perStage[stage.key]) || 0;
+                    const mwCompleted = completions * MW_PER_TRACKER;
+                    const modulesCompleted = completions * MODULES_PER_TRACKER;
+
+                    const mhPerMw = mwCompleted > 0 ? mh / mwCompleted : 0;
+                    const mhPerMod = modulesCompleted > 0 ? mh / modulesCompleted : 0;
+
+                    mhMw.push(mhPerMw);
+                    mhMod.push(mhPerMod);
+                });
+
+                mhMwSeries.push({
+                    name: `${stage.label} MH/MW`,
+                    type: 'line',
+                    smooth: true,
+                    data: mhMw
+                });
+                mhModSeries.push({
+                    name: `${stage.label} MH/mod`,
+                    type: 'line',
+                    smooth: true,
+                    data: mhMod
+                });
+            });
+
+            const optionMhMw = {
+                title: { text: 'Productivity (MH/MW)', left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'axis' },
+                legend: { top: 24, type: 'scroll' },
+                grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates },
+                yAxis: { type: 'value', name: 'MH / MW', min: 0 },
+                series: mhMwSeries
+            };
+
+            const optionMhMod = {
+                title: { text: 'Productivity (MH/mod)', left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'axis' },
+                legend: { top: 24, type: 'scroll' },
+                grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates },
+                yAxis: { type: 'value', name: 'MH / mod', min: 0 },
+                series: mhModSeries
+            };
+
+            window.productivityMhMwChartInstance.setOption(optionMhMw);
+            window.productivityMhModChartInstance.setOption(optionMhMod);
+        }
+
+        function renderManpowerTable() {
+            const body = document.getElementById('manpowerTableBody');
+            if (!body) return;
+            body.innerHTML = '';
+
+            Object.keys(manpowerConfig).sort().forEach(dateStr => {
+                const cfg = manpowerConfig[dateStr];
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${dateStr}</td>
+                    ${['pile','torque_tube','module_rails','solar_panel'].map(stage => `
+                        <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
+                            <input type="number" min="0" value="${cfg[stage] ?? 0}" 
+                                   data-date="${dateStr}" data-stage="${stage}"
+                                   style="width:60px; font-size:11px; padding:2px 4px;">
+                        </td>
+                    `).join('')}
+                `;
+                body.appendChild(tr);
+            });
+
+            body.querySelectorAll('input[type="number"]').forEach(input => {
+                input.addEventListener('change', (e) => {
+                    const dateStr = e.target.dataset.date;
+                    const stage = e.target.dataset.stage;
+                    const val = parseFloat(e.target.value) || 0;
+                    if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
+                    manpowerConfig[dateStr][stage] = val;
+                    // Update charts immediately
+                    updateManpowerChart();
+                    updateProductivityChart();
+                });
+            });
+
+            // Wire global parameter inputs
+            const mwInput = document.getElementById('mwPerTrackerInput');
+            const modInput = document.getElementById('modulesPerTrackerInput');
+            if (mwInput) {
+                mwInput.value = MW_PER_TRACKER.toString();
+                mwInput.addEventListener('change', (e) => {
+                    const v = parseFloat(e.target.value);
+                    MW_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
+                    updateProductivityChart();
+                });
+            }
+            if (modInput) {
+                modInput.value = MODULES_PER_TRACKER.toString();
+                modInput.addEventListener('change', (e) => {
+                    const v = parseFloat(e.target.value);
+                    MODULES_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
+                    updateProductivityChart();
+                });
+            }
+        }
+
+        function initializeDailyPieChart() {
+            if (typeof echarts === 'undefined') return;
+            const pieEl = document.getElementById('dailyPieChart');
+            const selectEl = document.getElementById('dailyPieDateSelect');
+            if (!pieEl || !selectEl) return;
+
+            window.dailyPieChartInstance = echarts.init(pieEl);
+
+            // Populate date dropdown
+            selectEl.innerHTML = '';
+            availableDates.forEach(d => {
+                const opt = document.createElement('option');
+                opt.value = d.display;
+                opt.textContent = d.display;
+                selectEl.appendChild(opt);
+            });
+
+            if (availableDates.length) {
+                selectEl.value = availableDates[0].display;
+                updateDailyPieChart();
+            }
+
+            selectEl.addEventListener('change', () => {
+                updateDailyPieChart();
+            });
+        }
+
+        function updateDailyPieChart() {
+            if (!window.dailyPieChartInstance || !availableDates.length) return;
+            const selectEl = document.getElementById('dailyPieDateSelect');
+            if (!selectEl) return;
+            const selectedDisp = selectEl.value;
+
+            const summary = allDateSummaries[selectedDisp];
+            if (!summary) {
+                window.dailyPieChartInstance.clear();
+                return;
+            }
+
+            // Update total trackers label
+            const totalLabel = document.getElementById('dailyPieTotal');
+            if (totalLabel) {
+                const total = summary.totalTrackers || 0;
+                totalLabel.textContent = `Total trackers: ${total}`;
+            }
+
+            const data = stageDefinitions.map(stage => {
+                const countsByStatus = summary.stageStatusCounts[stage.key] || {};
+                const totalForStage = statusDefinitions.reduce(
+                    (acc, st) => acc + (countsByStatus[st.key] || 0),
+                    0
+                );
+                return { name: stage.label, value: totalForStage };
+            }).filter(item => item.value > 0);
+
+            const option = {
+                title: { text: `Stage distribution on ${selectedDisp}`, left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' },
+                legend: { bottom: 0, type: 'scroll' },
+                series: [{
+                    name: 'Stages',
+                    type: 'pie',
+                    radius: '60%',
+                    center: ['50%', '45%'],
+                    data
+                }]
+            };
+
+            window.dailyPieChartInstance.setOption(option);
+        }
+
+        function renderDailyTable() {
+            const body = document.getElementById('dailyTableBody');
+            if (!body) return;
+            body.innerHTML = '';
+
+            workingDaySeries.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.pile.toFixed(2)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.torque_tube.toFixed(2)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.module_rails.toFixed(2)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.solar_panel.toFixed(2)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.total.toFixed(2)}</td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
         function showError(message) {
             document.getElementById('layoutContainer').innerHTML = 
                 `<div class="error">${message}</div>`;
@@ -1097,6 +1726,19 @@
                 timelineContainer.style.left = leftPosition + 'px';
                 timelineContainer.style.width = timelineWidth + 'px';
             }
+        }
+
+        function renderTimelineDots() {
+            const dotsContainer = document.getElementById('timelineDots');
+            if (!dotsContainer) return;
+            dotsContainer.innerHTML = '';
+            if (!availableDates.length) return;
+
+            availableDates.forEach(() => {
+                const dot = document.createElement('div');
+                dot.className = 'timeline-dot';
+                dotsContainer.appendChild(dot);
+            });
         }
         
         function updateTimelinePosition() {

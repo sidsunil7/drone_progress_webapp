@@ -17,6 +17,65 @@ LAYOUT_DIR = os.environ.get('LAYOUT_DIR', os.path.join(os.path.dirname(os.path.a
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', os.path.join(BASE_DIR, "Output_Lewis"))
 LEWISTIFS_DIR = os.environ.get('LEWISTIFS_DIR', os.path.join(BASE_DIR, "Lewistifs"))
 
+
+def normalize_status(status):
+    """Normalize status strings to snake_case like 'not_started', 'in_progress', 'completed'."""
+    if not status:
+        return ""
+    return status.strip().lower().replace(" ", "_")
+
+
+def compute_current_stage_from_row(row):
+    """
+    Given a CSV row with per-stage columns like:
+    - pile_stage, torque_tube_stage, module_rails_stage, solar_panel_stage
+
+    Compute:
+    - current_stage (one of: pile, torque_tube, module_rails, solar_panel)
+    - current_status (normalized)
+
+    Priority order:
+    pile < torque_tube < module_rails < solar_panel
+
+    Logic:
+    - If any stage is 'in_progress', pick the highest-priority stage that is in_progress.
+    - Else, if any stage is 'completed', pick the highest-priority completed stage.
+    - Else, fall back to the first stage that has any status; if none, use pile/not_started.
+    """
+    stage_order = ["pile", "torque_tube", "module_rails", "solar_panel"]
+    col_map = {
+        "pile": "pile_stage",
+        "torque_tube": "torque_tube_stage",
+        "module_rails": "module_rails_stage",
+        "solar_panel": "solar_panel_stage",
+    }
+
+    stage_statuses = {}
+    for stage, col in col_map.items():
+        raw = row.get(col, "") if row is not None else ""
+        norm = normalize_status(raw)
+        stage_statuses[stage] = norm or None
+
+    # 1) Prefer any stage in progress (latest in the pipeline)
+    in_progress_stages = [s for s in stage_order if stage_statuses.get(s) == "in_progress"]
+    if in_progress_stages:
+        current_stage = in_progress_stages[-1]
+        return current_stage, "in_progress"
+
+    # 2) Otherwise, use the latest completed stage
+    completed_stages = [s for s in stage_order if stage_statuses.get(s) == "completed"]
+    if completed_stages:
+        current_stage = completed_stages[-1]
+        return current_stage, "completed"
+
+    # 3) Fallback: first stage with any status, else pile/not_started
+    for s in stage_order:
+        if stage_statuses.get(s):
+            return s, stage_statuses[s]
+
+    return "pile", "not_started"
+
+
 def load_tracker_boundaries(json_path):
     """Load tracker boundaries from JSON"""
     with open(json_path, 'r') as f:
@@ -38,18 +97,51 @@ def load_tracker_boundaries(json_path):
     return boundaries
 
 def load_tracker_info(csv_path):
-    """Load tracker stage and status from CSV"""
+    """Load tracker stage and status from CSV.
+
+    Supports two formats:
+    1) Old format with 'Current_stage' and 'Status' columns (tracker_webapp layout_data).
+    2) New per-stage format with columns:
+       'pile_stage', 'torque_tube_stage', 'module_rails_stage', 'solar_panel_stage'.
+    """
     tracker_info = {}
-    if os.path.exists(csv_path):
-        with open(csv_path, 'r', newline='') as csvfile:
-            reader = csv.DictReader(csvfile)
-            for row in reader:
-                tracker_id = row.get('Tracker ID', '').strip()
-                if tracker_id:
-                    tracker_info[tracker_id] = {
-                        'stage': row.get('Current_stage', '').strip(),
-                        'status': row.get('Status', '').strip()
-                    }
+    if not csv_path or not os.path.exists(csv_path):
+        return tracker_info
+
+    with open(csv_path, 'r', newline='') as csvfile:
+        reader = csv.DictReader(csvfile)
+        fieldnames = reader.fieldnames or []
+
+        has_current_cols = "Current_stage" in fieldnames and "Status" in fieldnames
+        has_per_stage_cols = (
+            "pile_stage" in fieldnames
+            and "torque_tube_stage" in fieldnames
+            and "module_rails_stage" in fieldnames
+            and "solar_panel_stage" in fieldnames
+        )
+
+        for row in reader:
+            tracker_id = (row.get('Tracker ID') or '').strip()
+            if not tracker_id:
+                continue
+
+            if has_current_cols:
+                stage = (row.get('Current_stage') or '').strip()
+                status = (row.get('Status') or '').strip()
+                tracker_info[tracker_id] = {
+                    'stage': stage,
+                    'status': status,
+                }
+            elif has_per_stage_cols:
+                stage, status = compute_current_stage_from_row(row)
+                tracker_info[tracker_id] = {
+                    'stage': stage,
+                    'status': status,
+                }
+            else:
+                # Unknown CSV format; skip gracefully
+                continue
+
     return tracker_info
 
 def tif_to_base64(tif_path, max_size=2000):
