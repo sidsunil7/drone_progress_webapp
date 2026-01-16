@@ -674,7 +674,7 @@
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
                     <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Stage Progress by Date</h2>
                     <p id="tableDescription" style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Each row shows how many trackers are in each main construction stage on that date (summing to the total number of trackers).
+                        Each row shows how many trackers have each main construction stage fully completed on that date (one stage per tracker).
                     </p>
                     <table id="dailyTable" style="width:100%; border-collapse:collapse; font-size:12px;">
                         <thead>
@@ -684,12 +684,14 @@
                                 <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
                                 <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
                                 <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Total</th>
                             </tr>
                         </thead>
                         <tbody id="dailyTableBody">
                         </tbody>
                     </table>
+                    <p id="stageCompletionEstimates" style="font-size:12px; color:#014059; margin-top:8px; font-weight:600;">
+                        Estimated Stage Completion Dates: Calculating...
+                    </p>
                 </div>
             </div>
 
@@ -723,14 +725,14 @@
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
                     <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Manpower Configuration</h2>
                     <p style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Hardcoded initial values for number of people per stage per day. Edits here affect charts for this session only.
+                        Enter the total number of people working on site for each day. Edits here affect charts for this session only.
                     </p>
                     <div style="margin-bottom:10px; padding:8px; background:#f9f9f9; border-radius:6px; border:1px solid #e0e0e0;">
                         <div style="font-size:13px; color:#014059; font-weight:600; margin-bottom:4px;">Global Parameters</div>
                         <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#333;">
                             <label>
-                                MW per tracker:
-                                <input type="number" id="mwPerTrackerInput" step="0.001" min="0" value="0.01" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                                Module wattage (W):
+                                <input type="number" id="mwPerTrackerInput" step="1" min="0" value="545" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
                             </label>
                             <label>
                                 Modules per tracker:
@@ -742,10 +744,7 @@
                         <thead>
                             <tr>
                                 <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Total People</th>
                             </tr>
                         </thead>
                         <tbody id="manpowerTableBody">
@@ -827,7 +826,7 @@
         // Manpower configuration (hardcoded initial values, editable in UI)
         // Keys are YYYY-MM-DD (display format from /api/dates.display)
         const HOURS_PER_DAY = 10; // assumed working hours per person per day
-        let MW_PER_TRACKER = 0.01; // editable in Settings view
+        let MODULE_WATTAGE = 545; // W per module, editable in Settings view
         let MODULES_PER_TRACKER = 28; // editable in Settings view
         let manpowerConfig = {};
 
@@ -864,6 +863,7 @@
                 buildWorkingDaySeries();
                 renderManpowerTable();
                 renderDailyTable();
+                updateStageCompletionEstimates();
                 initializeCharts();
                 initializeDailyPieChart();
                 
@@ -937,10 +937,7 @@
             availableDates.forEach(d => {
                 // Use display date (YYYY-MM-DD) as key
                 manpowerConfig[d.display] = {
-                    pile: 10,
-                    torque_tube: 8,
-                    module_rails: 6,
-                    solar_panel: 12
+                    total: 30
                 };
             });
         }
@@ -954,12 +951,18 @@
 
                 const summary = {
                     stageStatusCounts: {},
-                    totalTrackers: Object.keys(ld.tracker_info || {}).length
+                    totalTrackers: Object.keys(ld.tracker_info || {}).length,
+                    trackerStages: [] // per-tracker current stage/status
                 };
 
                 Object.values(ld.tracker_info || {}).forEach(info => {
                     const stageKey = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
                     const statusKey = (info.status || '').toLowerCase().replace(/\s+/g, '_');
+
+                    if (stageKey) {
+                        summary.trackerStages.push({ stage: stageKey, status: statusKey });
+                    }
+
                     if (!summary.stageStatusCounts[stageKey]) summary.stageStatusCounts[stageKey] = {};
                     if (!summary.stageStatusCounts[stageKey][statusKey]) summary.stageStatusCounts[stageKey][statusKey] = 0;
                     summary.stageStatusCounts[stageKey][statusKey] += 1;
@@ -978,8 +981,11 @@
                 allDateSummaries[d.display] = summary;
             }
 
-            // Build snapshot series for table: how many trackers are in each stage on each flight date
+            // Build snapshot series for table: how many trackers have each stage installed on each flight date,
+            // using the priority order pile < torque_tube < module_rails < solar_panel.
             snapshotSeries = [];
+            const orderedStages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+
             availableDates.forEach(d => {
                 const disp = d.display;
                 const sum = allDateSummaries[disp];
@@ -991,20 +997,32 @@
                     total: sum.totalTrackers || 0
                 };
 
-                stageDefinitions.forEach(stage => {
-                    const countsByStatus = sum.stageStatusCounts[stage.key] || {};
-                    let stageTotal = 0;
-                    statusDefinitions.forEach(st => {
-                        stageTotal += countsByStatus[st.key] || 0;
-                    });
-                    row.perStage[stage.key] = stageTotal;
+                // For each tracker, treat earlier stages as installed once the tracker has moved on.
+                (sum.trackerStages || []).forEach(ts => {
+                    const idx = orderedStages.indexOf(ts.stage);
+                    if (idx === -1) return;
+
+                    if (ts.status === 'completed') {
+                        // Current stage completed: all stages up to and including this one are installed.
+                        for (let i = 0; i <= idx; i++) {
+                            const key = orderedStages[i];
+                            row.perStage[key] = (row.perStage[key] || 0) + 1;
+                        }
+                    } else {
+                        // In-progress / not started: only earlier stages are fully installed.
+                        for (let i = 0; i < idx; i++) {
+                            const key = orderedStages[i];
+                            row.perStage[key] = (row.perStage[key] || 0) + 1;
+                        }
+                    }
                 });
 
                 snapshotSeries.push(row);
             });
 
-            // Build tableSeries over all calendar days between first and last flight,
-            // filling in zeros for dates without flights.
+            // Build tableSeries over all calendar days between first and last flight.
+            // Progress between flight dates is split evenly across working days (Mon–Fri),
+            // and counts are cumulative by date.
             tableSeries = [];
             if (snapshotSeries.length > 0) {
                 const oneDayMs = 24 * 60 * 60 * 1000;
@@ -1013,29 +1031,79 @@
                     return new Date(str + 'T00:00:00');
                 }
 
-                const firstDateStr = snapshotSeries[0].date;
-                const lastDateStr = snapshotSeries[snapshotSeries.length - 1].date;
-                const firstDate = parseDate(firstDateStr);
-                const lastDate = parseDate(lastDateStr);
+                function isWeekend(date) {
+                    const day = date.getDay(); // 0=Sun, 6=Sat
+                    return day === 0 || day === 6;
+                }
 
-                const snapshotMap = {};
-                snapshotSeries.forEach(r => {
-                    snapshotMap[r.date] = r;
-                });
+                const firstSnap = snapshotSeries[0];
+                const lastSnap = snapshotSeries[snapshotSeries.length - 1];
+                const firstDate = parseDate(firstSnap.date);
+                const lastDate = parseDate(lastSnap.date);
+
+                // Map of dateStr -> incremental completions for that date (floats)
+                const incrementsByDate = {};
+
+                // Distribute deltas between consecutive flight dates across working days
+                for (let i = 1; i < snapshotSeries.length; i++) {
+                    const prev = snapshotSeries[i - 1];
+                    const cur = snapshotSeries[i];
+                    const prevDate = parseDate(prev.date);
+                    const curDate = parseDate(cur.date);
+
+                    // Collect working days between prev and current (exclusive prev, inclusive current)
+                    const workingDates = [];
+                    for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
+                        const d = new Date(t);
+                        if (!isWeekend(d)) {
+                            workingDates.push(d);
+                        }
+                    }
+                    if (!workingDates.length) continue;
+
+                    orderedStages.forEach(stageKey => {
+                        const prevVal = prev.perStage[stageKey] || 0;
+                        const curVal = cur.perStage[stageKey] || 0;
+                        const delta = Math.max(0, curVal - prevVal);
+                        if (delta === 0) return;
+
+                        const perDay = delta / workingDates.length;
+                        workingDates.forEach(d => {
+                            const disp = d.toISOString().slice(0, 10);
+                            if (!incrementsByDate[disp]) {
+                                incrementsByDate[disp] = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
+                            }
+                            incrementsByDate[disp][stageKey] += perDay;
+                        });
+                    });
+                }
+
+                // Walk all calendar days from first to last, applying increments and storing cumulative counts
+                let cumulative = {
+                    pile: firstSnap.perStage.pile || 0,
+                    torque_tube: firstSnap.perStage.torque_tube || 0,
+                    module_rails: firstSnap.perStage.module_rails || 0,
+                    solar_panel: firstSnap.perStage.solar_panel || 0
+                };
 
                 for (let t = firstDate.getTime(); t <= lastDate.getTime(); t += oneDayMs) {
                     const d = new Date(t);
                     const disp = d.toISOString().slice(0, 10);
-                    const existing = snapshotMap[disp];
-                    if (existing) {
-                        tableSeries.push(existing);
-                    } else {
-                        tableSeries.push({
-                            date: disp,
-                            perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
-                            total: 0
-                        });
+
+                    if (t !== firstDate.getTime()) {
+                        const inc = incrementsByDate[disp];
+                        if (inc) {
+                            orderedStages.forEach(stageKey => {
+                                cumulative[stageKey] += inc[stageKey] || 0;
+                            });
+                        }
                     }
+
+                    tableSeries.push({
+                        date: disp,
+                        perStage: { ...cumulative },
+                        total: 0
+                    });
                 }
             }
         }
@@ -1213,20 +1281,15 @@
             if (!window.manpowerChartInstance || !availableDates.length) return;
 
             const xDates = Object.keys(manpowerConfig).sort();
-            const series = [];
-
-            stageDefinitions.forEach(stage => {
-                series.push({
-                    name: stage.label,
-                    type: 'bar',
-                    stack: 'manpower',
-                    emphasis: { focus: 'series' },
-                    data: xDates.map(d => (manpowerConfig[d]?.[stage.key] ?? 0))
-                });
-            });
+            const series = [{
+                name: 'Total People',
+                type: 'bar',
+                emphasis: { focus: 'series' },
+                data: xDates.map(d => (manpowerConfig[d]?.total ?? 0))
+            }];
 
             const option = {
-                title: { text: 'Manpower by Stage', left: 'center', textStyle: { fontSize: 12 } },
+                title: { text: 'Total Manpower', left: 'center', textStyle: { fontSize: 12 } },
                 tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
                 legend: { top: 24 },
                 grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
@@ -1243,6 +1306,16 @@
 
             const xDates = workingDaySeries.map(r => r.date);
 
+            // Build per-date total manpower, forward-filling between specified dates
+            const manpowerTotalByDate = {};
+            let lastKnown = 0;
+            xDates.forEach(dateStr => {
+                if (manpowerConfig[dateStr] && typeof manpowerConfig[dateStr].total === 'number') {
+                    lastKnown = manpowerConfig[dateStr].total;
+                }
+                manpowerTotalByDate[dateStr] = lastKnown;
+            });
+
             // For each stage, compute MH/MW and MH/mod per day
             const mhMwSeries = [];
             const mhModSeries = [];
@@ -1252,12 +1325,26 @@
                 const mhMod = [];
 
                 xDates.forEach(dateStr => {
-                    const manpower = manpowerConfig[dateStr] || {};
-                    const people = manpower[stage.key] ?? 0;
+                    const totalPeople = manpowerTotalByDate[dateStr] || 0;
+                    const workingRow = workingDaySeries.find(r => r.date === dateStr);
+                    const perStageCompletions = workingRow?.perStage || {};
+
+                    const stageCompletions = perStageCompletions[stage.key] || 0;
+                    const totalStageCompletions = stageDefinitions.reduce(
+                        (acc, s) => acc + (perStageCompletions[s.key] || 0),
+                        0
+                    );
+
+                    // Allocate total manpower to stages in proportion to completions that day
+                    const people = totalStageCompletions > 0
+                        ? totalPeople * (stageCompletions / totalStageCompletions)
+                        : 0;
+
                     const mh = people * HOURS_PER_DAY;
 
-                    const completions = (workingDaySeries.find(r => r.date === dateStr)?.perStage[stage.key]) || 0;
-                    const mwCompleted = completions * MW_PER_TRACKER;
+                    const completions = stageCompletions;
+                    // Convert module completions to MW using module wattage (W) and modules per tracker
+                    const mwCompleted = completions * MODULES_PER_TRACKER * MODULE_WATTAGE / 1_000_000;
                     const modulesCompleted = completions * MODULES_PER_TRACKER;
 
                     const mhPerMwRaw = mwCompleted > 0 ? mh / mwCompleted : 0;
@@ -1318,13 +1405,11 @@
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td style="padding:4px 6px; border-bottom:1px solid #eee;">${dateStr}</td>
-                    ${['pile','torque_tube','module_rails','solar_panel'].map(stage => `
-                        <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
-                            <input type="number" min="0" value="${cfg[stage] ?? 0}" 
-                                   data-date="${dateStr}" data-stage="${stage}"
-                                   style="width:60px; font-size:11px; padding:2px 4px;">
-                        </td>
-                    `).join('')}
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
+                        <input type="number" min="0" value="${cfg.total ?? 0}"
+                               data-date="${dateStr}" data-key="total"
+                               style="width:80px; font-size:11px; padding:2px 4px;">
+                    </td>
                 `;
                 body.appendChild(tr);
             });
@@ -1332,10 +1417,10 @@
             body.querySelectorAll('input[type="number"]').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const dateStr = e.target.dataset.date;
-                    const stage = e.target.dataset.stage;
+                    const key = e.target.dataset.key || 'total';
                     const val = parseFloat(e.target.value) || 0;
                     if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
-                    manpowerConfig[dateStr][stage] = val;
+                    manpowerConfig[dateStr][key] = val;
                     // Update charts immediately
                     updateManpowerChart();
                     updateProductivityChart();
@@ -1346,10 +1431,10 @@
             const mwInput = document.getElementById('mwPerTrackerInput');
             const modInput = document.getElementById('modulesPerTrackerInput');
             if (mwInput) {
-                mwInput.value = MW_PER_TRACKER.toString();
+                mwInput.value = MODULE_WATTAGE.toString();
                 mwInput.addEventListener('change', (e) => {
                     const v = parseFloat(e.target.value);
-                    MW_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
+                    MODULE_WATTAGE = isNaN(v) || v < 0 ? 0 : v;
                     updateProductivityChart();
                 });
             }
@@ -1441,18 +1526,106 @@
             if (!body) return;
             body.innerHTML = '';
 
+            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
             tableSeries.forEach(row => {
                 const tr = document.createElement('tr');
+                const d = new Date(row.date + 'T00:00:00');
+                const dow = dayNames[d.getDay()];
                 tr.innerHTML = `
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.pile}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.torque_tube}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.module_rails}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.perStage.solar_panel}</td>
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${row.total}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date} (${dow})</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${Math.round(row.perStage.pile)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${Math.round(row.perStage.torque_tube)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${Math.round(row.perStage.module_rails)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${Math.round(row.perStage.solar_panel)}</td>
                 `;
                 body.appendChild(tr);
             });
+        }
+
+        function estimateStageCompletionDate(stageKey) {
+            if (!tableSeries.length || !snapshotSeries.length) return null;
+
+            const lastRow = tableSeries[tableSeries.length - 1];
+            const finalCompleted = lastRow.perStage?.[stageKey] || 0;
+            const totalTrackers = snapshotSeries[snapshotSeries.length - 1].total || 0;
+
+            if (!totalTrackers || finalCompleted <= 0) {
+                return null; // no progress for this stage
+            }
+
+            // Find first date where this stage has any completed value
+            let startIdx = -1;
+            for (let i = 0; i < tableSeries.length; i++) {
+                const v = tableSeries[i].perStage?.[stageKey] || 0;
+                if (v > 0) {
+                    startIdx = i;
+                    break;
+                }
+            }
+            if (startIdx === -1) return null;
+
+            // Count working days (Mon–Fri) from startIdx to last index (inclusive)
+            let workingDays = 0;
+            for (let i = startIdx; i < tableSeries.length; i++) {
+                const dateStr = tableSeries[i].date;
+                const d = new Date(dateStr + 'T00:00:00');
+                const day = d.getDay(); // 0=Sun, 6=Sat
+                if (day !== 0 && day !== 6) {
+                    workingDays += 1;
+                }
+            }
+            if (workingDays <= 0) return null;
+
+            const ratePerWorkingDay = finalCompleted / workingDays;
+            if (ratePerWorkingDay <= 0) return null;
+
+            const remaining = totalTrackers - finalCompleted;
+            if (remaining <= 0) {
+                return lastRow.date; // already complete
+            }
+
+            const neededWorkingDays = Math.ceil(remaining / ratePerWorkingDay);
+
+            // Add working days forward from lastRow.date, skipping weekends
+            let d = new Date(lastRow.date + 'T00:00:00');
+            let remainingDays = neededWorkingDays;
+            const oneDayMs = 24 * 60 * 60 * 1000;
+            while (remainingDays > 0) {
+                d = new Date(d.getTime() + oneDayMs);
+                const day = d.getDay();
+                if (day === 0 || day === 6) continue;
+                remainingDays -= 1;
+            }
+            return d.toISOString().slice(0, 10);
+        }
+
+        function updateStageCompletionEstimates() {
+            const el = document.getElementById('stageCompletionEstimates');
+            if (!el) return;
+
+            if (!tableSeries.length || !snapshotSeries.length) {
+                el.textContent = 'Estimated Stage Completion Dates: N/A';
+                return;
+            }
+
+            const estimates = {};
+            stageDefinitions.forEach(stage => {
+                estimates[stage.key] = estimateStageCompletionDate(stage.key);
+            });
+
+            function fmt(label, key) {
+                const v = estimates[key];
+                return `${label}: ${v || 'N/A'}`;
+            }
+
+            el.innerHTML = [
+                'Estimated Stage Completion Dates:',
+                fmt('Piles', 'pile'),
+                fmt('Torque Tubes', 'torque_tube'),
+                fmt('Module Rails', 'module_rails'),
+                fmt('Modules', 'solar_panel')
+            ].join('<br>');
         }
 
         function showError(message) {
