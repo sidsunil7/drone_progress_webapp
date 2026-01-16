@@ -754,7 +754,7 @@
             </div>
         </div>
         
-        <div class="sidebar">
+        <div class="sidebar" id="rightSidebar">
             <div class="overlay-controls">
                 <label class="toggle-switch">
                     <input type="checkbox" id="overlayToggle" checked>
@@ -855,11 +855,12 @@
                 
                 availableDates = data.dates;
 
-                // Initialize manpower config with default values for each date (can be edited later)
-                initializeManpowerConfig();
-
                 // Precompute summaries for all dates (for charts/table)
                 await computeAllDateSummaries();
+
+                // Initialize manpower config with default values for each working day (can be edited later)
+                initializeManpowerConfig();
+
                 buildWorkingDaySeries();
                 renderManpowerTable();
                 renderDailyTable();
@@ -910,6 +911,7 @@
                 charts: document.getElementById('chartsView'),
                 settings: document.getElementById('settingsView')
             };
+            const sidebar = document.getElementById('rightSidebar');
 
             tabs.forEach(tab => {
                 tab.addEventListener('click', () => {
@@ -919,6 +921,11 @@
                         if (!el) return;
                         el.classList.toggle('active', key === view);
                     });
+
+                    // Show sidebar filters only on Map view
+                    if (sidebar) {
+                        sidebar.style.display = (view === 'map') ? 'block' : 'none';
+                    }
 
                     // Resize charts when charts view is activated
                     if (view === 'charts') {
@@ -930,16 +937,35 @@
                     }
                 });
             });
+
+            // Ensure initial state matches default active tab (Map)
+            if (sidebar) {
+                sidebar.style.display = 'block';
+            }
         }
 
         function initializeManpowerConfig() {
             manpowerConfig = {};
-            availableDates.forEach(d => {
-                // Use display date (YYYY-MM-DD) as key
-                manpowerConfig[d.display] = {
-                    total: 30
-                };
-            });
+
+            // Prefer all working days from the table series if available
+            if (tableSeries.length) {
+                tableSeries.forEach(row => {
+                    const d = new Date(row.date + 'T00:00:00');
+                    const day = d.getDay(); // 0=Sun, 6=Sat
+                    if (day === 0 || day === 6) return; // skip weekends
+
+                    if (!manpowerConfig[row.date]) {
+                        manpowerConfig[row.date] = { total: 30 };
+                    }
+                });
+            } else {
+                // Fallback: just use the flight dates
+                availableDates.forEach(d => {
+                    manpowerConfig[d.display] = {
+                        total: 30
+                    };
+                });
+            }
         }
 
         async function computeAllDateSummaries() {
