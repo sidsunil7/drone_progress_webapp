@@ -689,9 +689,18 @@
                         <tbody id="dailyTableBody">
                         </tbody>
                     </table>
-                    <p id="stageCompletionEstimates" style="font-size:12px; color:#014059; margin-top:8px; font-weight:600;">
-                        Estimated Stage Completion Dates: Calculating...
-                    </p>
+                    <p id="stageCompletionEstimates" style="display:none;"></p>
+                    <table id="stageDatesTable" style="width:100%; border-collapse:collapse; font-size:12px; margin-top:8px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Stage</th>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Estimated Completion Date</th>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Actual Completion Date</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stageDatesTableBody">
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -744,7 +753,11 @@
                         <thead>
                             <tr>
                                 <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
-                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Total People</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Total</th>
                             </tr>
                         </thead>
                         <tbody id="manpowerTableBody">
@@ -828,10 +841,21 @@
         const HOURS_PER_DAY = 10; // assumed working hours per person per day
         let MODULE_WATTAGE = 545; // W per module, editable in Settings view
         let MODULES_PER_TRACKER = 28; // editable in Settings view
+        // Per-date manpower config; values are per-stage + derived total, e.g.:
+        // { pile: 10, torque_tube: 10, module_rails: 5, solar_panel: 5, total: 30 }
         let manpowerConfig = {};
+        const DEFAULT_STAGE_MANPOWER = {
+            pile: 10,
+            torque_tube: 10,
+            module_rails: 5,
+            solar_panel: 5
+        };
 
         // Selected stage for progress chart (one of stageDefinitions keys)
         let progressSelectedStageKey = 'pile';
+        // Actual completion dates per stage (user input, one date per stage)
+        // Keys use stageDefinitions keys, e.g. 'pile', 'torque_tube', etc.
+        let actualStageDates = {};
         
         // Initialize
         async function init() {
@@ -955,15 +979,35 @@
                     if (day === 0 || day === 6) return; // skip weekends
 
                     if (!manpowerConfig[row.date]) {
-                        manpowerConfig[row.date] = { total: 30 };
+                        manpowerConfig[row.date] = {
+                            pile: DEFAULT_STAGE_MANPOWER.pile,
+                            torque_tube: DEFAULT_STAGE_MANPOWER.torque_tube,
+                            module_rails: DEFAULT_STAGE_MANPOWER.module_rails,
+                            solar_panel: DEFAULT_STAGE_MANPOWER.solar_panel
+                        };
+                        manpowerConfig[row.date].total =
+                            (manpowerConfig[row.date].pile || 0) +
+                            (manpowerConfig[row.date].torque_tube || 0) +
+                            (manpowerConfig[row.date].module_rails || 0) +
+                            (manpowerConfig[row.date].solar_panel || 0);
                     }
                 });
             } else {
                 // Fallback: just use the flight dates
                 availableDates.forEach(d => {
-                    manpowerConfig[d.display] = {
-                        total: 30
-                    };
+                    if (!manpowerConfig[d.display]) {
+                        manpowerConfig[d.display] = {
+                            pile: DEFAULT_STAGE_MANPOWER.pile,
+                            torque_tube: DEFAULT_STAGE_MANPOWER.torque_tube,
+                            module_rails: DEFAULT_STAGE_MANPOWER.module_rails,
+                            solar_panel: DEFAULT_STAGE_MANPOWER.solar_panel
+                        };
+                        manpowerConfig[d.display].total =
+                            (manpowerConfig[d.display].pile || 0) +
+                            (manpowerConfig[d.display].torque_tube || 0) +
+                            (manpowerConfig[d.display].module_rails || 0) +
+                            (manpowerConfig[d.display].solar_panel || 0);
+                    }
                 });
             }
         }
@@ -1307,15 +1351,16 @@
             if (!window.manpowerChartInstance || !availableDates.length) return;
 
             const xDates = Object.keys(manpowerConfig).sort();
-            const series = [{
-                name: 'Total People',
+            const series = stageDefinitions.map(stage => ({
+                name: stage.label,
                 type: 'bar',
+                stack: 'manpower',
                 emphasis: { focus: 'series' },
-                data: xDates.map(d => (manpowerConfig[d]?.total ?? 0))
-            }];
+                data: xDates.map(d => (manpowerConfig[d]?.[stage.key] ?? 0))
+            }));
 
             const option = {
-                title: { text: 'Total Manpower', left: 'center', textStyle: { fontSize: 12 } },
+                title: { text: 'Manpower by Stage', left: 'center', textStyle: { fontSize: 12 } },
                 tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
                 legend: { top: 24 },
                 grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
@@ -1336,8 +1381,18 @@
             const manpowerTotalByDate = {};
             let lastKnown = 0;
             xDates.forEach(dateStr => {
-                if (manpowerConfig[dateStr] && typeof manpowerConfig[dateStr].total === 'number') {
-                    lastKnown = manpowerConfig[dateStr].total;
+                const cfg = manpowerConfig[dateStr] || {};
+                let totalVal;
+                if (typeof cfg.total === 'number') {
+                    totalVal = cfg.total;
+                } else {
+                    totalVal = stageDefinitions.reduce(
+                        (acc, s) => acc + (cfg[s.key] || 0),
+                        0
+                    );
+                }
+                if (typeof totalVal === 'number' && !isNaN(totalVal)) {
+                    lastKnown = totalVal;
                 }
                 manpowerTotalByDate[dateStr] = lastKnown;
             });
@@ -1428,13 +1483,46 @@
 
             Object.keys(manpowerConfig).sort().forEach(dateStr => {
                 const cfg = manpowerConfig[dateStr];
+                const pile = cfg?.pile ?? 0;
+                const torque = cfg?.torque_tube ?? 0;
+                const rails = cfg?.module_rails ?? 0;
+                const mods = cfg?.solar_panel ?? 0;
+                const total = pile + torque + rails + mods;
+
+                // Ensure config stays in sync with what we render
+                if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
+                manpowerConfig[dateStr].pile = pile;
+                manpowerConfig[dateStr].torque_tube = torque;
+                manpowerConfig[dateStr].module_rails = rails;
+                manpowerConfig[dateStr].solar_panel = mods;
+                manpowerConfig[dateStr].total = total;
+
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
                     <td style="padding:4px 6px; border-bottom:1px solid #eee;">${dateStr}</td>
                     <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
-                        <input type="number" min="0" value="${cfg.total ?? 0}"
-                               data-date="${dateStr}" data-key="total"
-                               style="width:80px; font-size:11px; padding:2px 4px;">
+                        <input type="number" min="0" value="${pile}"
+                               data-date="${dateStr}" data-key="pile"
+                               style="width:70px; font-size:11px; padding:2px 4px;">
+                    </td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
+                        <input type="number" min="0" value="${torque}"
+                               data-date="${dateStr}" data-key="torque_tube"
+                               style="width:70px; font-size:11px; padding:2px 4px;">
+                    </td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
+                        <input type="number" min="0" value="${rails}"
+                               data-date="${dateStr}" data-key="module_rails"
+                               style="width:70px; font-size:11px; padding:2px 4px;">
+                    </td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
+                        <input type="number" min="0" value="${mods}"
+                               data-date="${dateStr}" data-key="solar_panel"
+                               style="width:70px; font-size:11px; padding:2px 4px;">
+                    </td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;"
+                        class="manpower-total-cell" data-date="${dateStr}">
+                        ${total}
                     </td>
                 `;
                 body.appendChild(tr);
@@ -1443,10 +1531,25 @@
             body.querySelectorAll('input[type="number"]').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const dateStr = e.target.dataset.date;
-                    const key = e.target.dataset.key || 'total';
+                    const key = e.target.dataset.key;
                     const val = parseFloat(e.target.value) || 0;
                     if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
                     manpowerConfig[dateStr][key] = val;
+
+                    // Recompute total from per-stage values and update display cell
+                    const total = stageDefinitions.reduce(
+                        (acc, s) => acc + (manpowerConfig[dateStr][s.key] || 0),
+                        0
+                    );
+                    manpowerConfig[dateStr].total = total;
+
+                    const totalCell = body.querySelector(
+                        `td.manpower-total-cell[data-date="${dateStr}"]`
+                    );
+                    if (totalCell) {
+                        totalCell.textContent = total;
+                    }
+
                     // Update charts immediately
                     updateManpowerChart();
                     updateProductivityChart();
@@ -1632,6 +1735,8 @@
 
             if (!tableSeries.length || !snapshotSeries.length) {
                 el.textContent = 'Estimated Stage Completion Dates: N/A';
+                const emptyBody = document.getElementById('stageDatesTableBody');
+                if (emptyBody) emptyBody.innerHTML = '';
                 return;
             }
 
@@ -1650,8 +1755,39 @@
                 fmt('Piles', 'pile'),
                 fmt('Torque Tubes', 'torque_tube'),
                 fmt('Module Rails', 'module_rails'),
-                fmt('Modules', 'solar_panel')
+                fmt('Modules', 'solar_panel'),
+                'Use the table below to record actual completion dates.'
             ].join('<br>');
+
+            // Populate the stage estimated vs actual dates table
+            const tableBody = document.getElementById('stageDatesTableBody');
+            if (tableBody) {
+                tableBody.innerHTML = '';
+
+                stageDefinitions.forEach(stage => {
+                    const est = estimates[stage.key] || 'N/A';
+                    const actualVal = actualStageDates[stage.key] || '';
+                    const tr = document.createElement('tr');
+                    tr.innerHTML = `
+                        <td style="padding:4px 6px; border-bottom:1px solid #eee;">${stage.label}</td>
+                        <td style="padding:4px 6px; border-bottom:1px solid #eee;">${est}</td>
+                        <td style="padding:4px 6px; border-bottom:1px solid #eee;">
+                            <input type="date"
+                                   data-stage="${stage.key}"
+                                   value="${actualVal}"
+                                   style="font-size:11px; padding:2px 4px; width:140px;">
+                        </td>
+                    `;
+                    tableBody.appendChild(tr);
+                });
+
+                tableBody.querySelectorAll('input[type="date"]').forEach(input => {
+                    input.addEventListener('change', (e) => {
+                        const sKey = e.target.dataset.stage;
+                        actualStageDates[sKey] = e.target.value;
+                    });
+                });
+            }
         }
 
         function showError(message) {
