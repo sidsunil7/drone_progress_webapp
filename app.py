@@ -19,7 +19,7 @@ OUTPUT_DIR = os.environ.get('OUTPUT_DIR', os.path.join(BASE_DIR, "Output_Lewis")
 LEWISTIFS_DIR = os.environ.get('LEWISTIFS_DIR', os.path.join(BASE_DIR, "Lewistifs"))
 SONRISA_JSON_PATH = os.environ.get(
     'SONRISA_JSON_PATH',
-    os.path.join(BASE_DIR, "Sonrisatifs", "Sonrisa_construction_AI.json")
+    os.path.join(BASE_LAYOUT_DIR, "Sonrisa", "Sonrisa_construction_AI.json")
 )
 
 ZONE_CODE_PATTERN = re.compile(r"^([A-Za-z])(\d{1,2})")
@@ -218,7 +218,8 @@ def get_sonrisa_json_path(project_layout_dir=None):
         candidates.append(SONRISA_JSON_PATH)
     if project_layout_dir:
         candidates.append(os.path.join(project_layout_dir, "Sonrisa_construction_AI.json"))
-    candidates.append(os.path.join(BASE_DIR, "Sonrisatifs", "Sonrisa_construction_AI.json"))
+    # Fallback to layout_data/Sonrisa if project_layout_dir is not provided
+    candidates.append(os.path.join(BASE_LAYOUT_DIR, "Sonrisa", "Sonrisa_construction_AI.json"))
     candidates.append(os.path.join(BASE_DIR, "Sonrisa_construction_AI.json"))
     for path in candidates:
         if path and os.path.exists(path):
