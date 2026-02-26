@@ -438,14 +438,61 @@
             overflow-y: auto;
         }
         
+        .tracker-zoom-controls {
+            width: 100%;
+            display: flex;
+            justify-content: flex-end;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .tracker-zoom-btn {
+            width: 28px;
+            height: 28px;
+            border: 1px solid #ddd;
+            background: white;
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            color: #014059;
+            user-select: none;
+            transition: all 0.2s;
+        }
+
+        .tracker-zoom-btn:hover {
+            background: #f0f0f0;
+            border-color: #014059;
+        }
+
+        .tracker-zoom-btn:active {
+            background: #e0e0e0;
+        }
+
+        .tracker-preview-image-wrapper {
+            width: 100%;
+            max-height: calc(100vh - 260px);
+            overflow: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #fff;
+            display: flex;
+            align-items: flex-start;
+            justify-content: flex-start;
+        }
+
         #trackerPreviewImage {
             width: 100%;
-            max-width: 100%;
-            max-height: calc(100vh - 220px);
+            height: auto;
+            max-width: none;
+            max-height: none;
             border: 2px solid #014059;
             border-radius: 4px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             object-fit: contain;
+            transform-origin: top left;
         }
         
         .tracker-preview-content {
@@ -497,6 +544,11 @@
             background: #f9f9f9;
             border-radius: 8px;
             border: 1px solid #e0e0e0;
+        }
+
+        .filter-container.legend-only .filter-button {
+            pointer-events: none;
+            cursor: default;
         }
         
         .filter-container[open] {
@@ -862,6 +914,7 @@
         const PROJECT = "{{ project|default('Lewis') }}";
         let currentDate = null;
         let availableDates = [];
+        let zoneMapDates = [];
         let layoutData = null;
         let canvas = null;
         let ctx = null;
@@ -870,6 +923,8 @@
         let scaleY = 1;
         let imageScaleFactor = 1.0; // Scale factor from display image to original image
         let selectedTrackerId = null;
+        let trackerZoomLevel = 1.0;
+        let isZonePickerActive = false;
         
         // Zoom and pan state
         let zoomLevel = 1.0;
@@ -1009,6 +1064,9 @@
                 if (zonePicker) zonePicker.style.display = 'block';
                 if (layoutWrapper) layoutWrapper.style.display = 'none';
                 if (timelineContainer) timelineContainer.style.display = 'none';
+                isZonePickerActive = true;
+                renderStageFilters();
+                renderStatusFilters();
                 if (backBtn) {
                     backBtn.style.display = 'inline-flex';
                     backBtn.addEventListener('click', returnToZonePicker);
@@ -1035,6 +1093,33 @@
                             selectZone(zone);
                         }
                     });
+                }
+
+                const dateResp = await fetch('/api/sonrisa/dates');
+                const dateData = await dateResp.json();
+                if (!dateData.error && Array.isArray(dateData.dates) && dateData.dates.length > 0) {
+                    zoneMapDates = dateData.dates;
+                    availableDates = zoneMapDates;
+                    const timelineContainer = document.getElementById('timelineContainer');
+                    if (timelineContainer) {
+                        timelineContainer.style.display = 'block';
+                        const slider = document.getElementById('timelineSlider');
+                        slider.max = availableDates.length - 1;
+                        slider.value = 0;
+                        document.getElementById('timelineStart').textContent = availableDates[0].display;
+                        document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
+                        document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                        slider.oninput = (e) => {
+                            const index = parseInt(e.target.value);
+                            const selectedDate = availableDates[index];
+                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            updateZoneMapForDate(selectedDate.date);
+                        };
+                        renderTimelineDots();
+                        updateZoneMapForDate(availableDates[0].date);
+                    }
+                } else if (timelineContainer) {
+                    timelineContainer.style.display = 'none';
                 }
 
                 // Zone selection happens by clicking the block map.
@@ -1085,6 +1170,9 @@
             const layoutWrapper = document.getElementById('layoutWrapper');
             if (zonePicker) zonePicker.style.display = 'none';
             if (layoutWrapper) layoutWrapper.style.display = 'flex';
+            isZonePickerActive = false;
+            renderStageFilters();
+            renderStatusFilters();
 
             const response = await fetch(`/api/dates?zone=${encodeURIComponent(zone)}`);
             const data = await response.json();
@@ -1134,7 +1222,7 @@
         function returnToZonePicker() {
             selectedZone = null;
             currentDate = null;
-            availableDates = [];
+            availableDates = zoneMapDates;
             layoutData = null;
             selectedTrackerId = null;
             resetTrackerPreview();
@@ -1144,11 +1232,45 @@
             const timelineContainer = document.getElementById('timelineContainer');
             if (zonePicker) zonePicker.style.display = 'block';
             if (layoutWrapper) layoutWrapper.style.display = 'none';
-            if (timelineContainer) timelineContainer.style.display = 'none';
+            if (timelineContainer) {
+                timelineContainer.style.display = availableDates.length > 1 ? 'block' : 'none';
+                if (availableDates.length > 0) {
+                    const slider = document.getElementById('timelineSlider');
+                    slider.max = availableDates.length - 1;
+                    slider.value = 0;
+                    document.getElementById('timelineStart').textContent = availableDates[0].display;
+                    document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
+                    document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                    slider.oninput = (e) => {
+                        const index = parseInt(e.target.value);
+                        const selectedDate = availableDates[index];
+                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateZoneMapForDate(selectedDate.date);
+                    };
+                    renderTimelineDots();
+                    updateZoneMapForDate(availableDates[0].date);
+                }
+            }
+            isZonePickerActive = true;
+            renderStageFilters();
+            renderStatusFilters();
 
             const mapTab = document.querySelector('.view-tab[data-view="map"]');
             if (mapTab) {
                 mapTab.click();
+            }
+        }
+
+        async function updateZoneMapForDate(dateId) {
+            const blockMapImg = document.getElementById('sonrisaBlockMap');
+            const url = `/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`;
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (!data.error) {
+                zoneMeta = data;
+            }
+            if (blockMapImg) {
+                blockMapImg.src = `/api/sonrisa/block_map?date=${encodeURIComponent(dateId)}&v=${Date.now()}`;
             }
         }
 
@@ -2859,9 +2981,19 @@
                         <h3>${trackerId}</h3>
                         ${renderPreviewMeta(info)}
                     </div>
-                    <img id="trackerPreviewImage" src="${imageSrc}" alt="${trackerId}">
+                    <div class="tracker-zoom-controls">
+                        <button class="tracker-zoom-btn" id="trackerZoomOutBtn" title="Zoom out">−</button>
+                        <button class="tracker-zoom-btn" id="trackerZoomResetBtn" title="Reset zoom">Reset</button>
+                        <button class="tracker-zoom-btn" id="trackerZoomInBtn" title="Zoom in">+</button>
+                    </div>
+                    <div class="tracker-preview-image-wrapper">
+                        <img id="trackerPreviewImage" src="${imageSrc}" alt="${trackerId}">
+                    </div>
                         </div>
                     `;
+            trackerZoomLevel = 1.0;
+            bindTrackerZoomControls();
+            applyTrackerZoom();
         }
         
         function renderPreviewMeta(info = {}) {
@@ -2879,6 +3011,26 @@
                     </div>
                 </div>
             `;
+        }
+
+        function applyTrackerZoom() {
+            const img = document.getElementById('trackerPreviewImage');
+            if (!img) return;
+            img.style.transform = `scale(${trackerZoomLevel})`;
+        }
+
+        function setTrackerZoom(nextZoom) {
+            trackerZoomLevel = Math.max(0.5, Math.min(4.0, nextZoom));
+            applyTrackerZoom();
+        }
+
+        function bindTrackerZoomControls() {
+            const zoomInBtn = document.getElementById('trackerZoomInBtn');
+            const zoomOutBtn = document.getElementById('trackerZoomOutBtn');
+            const zoomResetBtn = document.getElementById('trackerZoomResetBtn');
+            if (zoomInBtn) zoomInBtn.onclick = () => setTrackerZoom(trackerZoomLevel + 0.25);
+            if (zoomOutBtn) zoomOutBtn.onclick = () => setTrackerZoom(trackerZoomLevel - 0.25);
+            if (zoomResetBtn) zoomResetBtn.onclick = () => setTrackerZoom(1.0);
         }
         
         function restoreSelectedTracker() {
@@ -2972,14 +3124,20 @@
         function renderStageFilters() {
             const container = document.getElementById('stageFilters');
             if (!container) return;
-            
-            if (!layoutData || !layoutData.tracker_info) {
-                container.innerHTML = '<p class="filter-hint">Tracker data unavailable.</p>';
-                return;
+            const filterContainer = container.closest('.filter-container');
+            if (filterContainer) {
+                filterContainer.classList.toggle('legend-only', isZonePickerActive);
             }
-            
+
+            if (!layoutData || !layoutData.tracker_info) {
+                if (!isZonePickerActive) {
+                    container.innerHTML = '<p class="filter-hint">Tracker data unavailable.</p>';
+                    return;
+                }
+            }
+
             container.innerHTML = '';
-            
+
             stageDefinitions.forEach(stage => {
                 const count = stageCounts[stage.key] || 0;
                 const percent = totalTrackers > 0 ? ((count / totalTrackers) * 100).toFixed(0) : 0;
@@ -2990,14 +3148,18 @@
                 }
                 button.dataset.stage = stage.key;
                 const legendColor = getStageColor(stage.key);
+                const labelText = isZonePickerActive ? stage.label : `${stage.label} (${percent}%)`;
+                const countText = isZonePickerActive ? '' : `<span class="filter-count">${count}</span>`;
                 button.innerHTML = `
                     <span>
                         <span class="filter-legend rectangle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
-                        ${stage.label} (${percent}%)
+                        ${labelText}
                     </span>
-                    <span class="filter-count">${count}</span>
+                    ${countText}
                 `;
-                button.addEventListener('click', () => handleStageSelection(stage.key));
+                if (!isZonePickerActive) {
+                    button.addEventListener('click', () => handleStageSelection(stage.key));
+                }
                 container.appendChild(button);
             });
         }
@@ -3005,12 +3167,11 @@
         function renderStatusFilters() {
             const container = document.getElementById('statusFilters');
             if (!container) return;
-            
-            if (!selectedStage) {
+            if (!selectedStage && !isZonePickerActive) {
                 container.innerHTML = '<p class="filter-hint">Select a stage to view status counts.</p>';
                 return;
             }
-            
+
             container.innerHTML = '';
             statusDefinitions.forEach(status => {
                 const count = stageStatusCounts[selectedStage]?.[status.key] || 0;
@@ -3022,14 +3183,18 @@
                 }
                 button.dataset.status = status.key;
                 const legendColor = getStatusColor(status.key);
+                const labelText = isZonePickerActive ? status.label : `${status.label} (${percent}%)`;
+                const countText = isZonePickerActive ? '' : `<span class="filter-count">${count}</span>`;
                 button.innerHTML = `
                     <span>
                         <span class="filter-legend circle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
-                        ${status.label} (${percent}%)
+                        ${labelText}
                     </span>
-                    <span class="filter-count">${count}</span>
+                    ${countText}
                 `;
-                button.addEventListener('click', () => handleStatusSelection(status.key));
+                if (!isZonePickerActive) {
+                    button.addEventListener('click', () => handleStatusSelection(status.key));
+                }
                 container.appendChild(button);
             });
         }

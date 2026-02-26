@@ -3,6 +3,7 @@ import os
 import json
 import csv
 import rasterio
+from rasterio.warp import transform as rio_transform
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -23,6 +24,13 @@ SONRISA_JSON_PATH = os.environ.get(
 )
 
 ZONE_CODE_PATTERN = re.compile(r"^([A-Za-z])(\d{1,2})")
+TIME_TOKEN_PATTERN = re.compile(r"^(\d{1,2})(am|pm)$", re.IGNORECASE)
+STAGE_COLORS = {
+    "pile": (128, 0, 128, 200),
+    "torque_tube": (200, 150, 255, 200),
+    "module_rails": (0, 0, 139, 200),
+    "solar_panel": (135, 206, 250, 200),
+}
 
 
 def normalize_status(status):
@@ -83,6 +91,54 @@ def compute_current_stage_from_row(row):
     return "pile", "not_started"
 
 
+def compute_current_stage_from_installation_row(row):
+    """
+    Given a CSV row with per-stage installation columns like:
+    - pile_installation, lower_journal_installation, ..., solar_module_installation
+    Compute current stage + status using the same priority logic.
+    """
+    stage_order = [
+        "pile_installation",
+        "torque_tube_installation",
+        "module_rail_installation",
+        "solar_module_installation",
+    ]
+    stage_label_map = {
+        "pile_installation": "pile",
+        "torque_tube_installation": "torque_tube",
+        "module_rail_installation": "module_rails",
+        "solar_module_installation": "solar_panel",
+    }
+
+    stage_statuses = {}
+    for stage in stage_order:
+        raw = row.get(stage, "") if row is not None else ""
+        stage_statuses[stage] = normalize_status(raw) or None
+
+    in_progress_stages = [s for s in stage_order if stage_statuses.get(s) == "in_progress"]
+    if in_progress_stages:
+        current_stage = in_progress_stages[-1]
+        return stage_label_map[current_stage], "in_progress"
+
+    completed_stages = [s for s in stage_order if stage_statuses.get(s) == "completed"]
+    if completed_stages:
+        last_completed = completed_stages[-1]
+        last_idx = stage_order.index(last_completed)
+        if last_idx < len(stage_order) - 1:
+            next_stage = stage_order[last_idx + 1]
+            next_status = stage_statuses.get(next_stage) or "not_started"
+            if next_status == "not_started":
+                return stage_label_map[last_completed], "completed"
+            return stage_label_map[next_stage], next_status
+        return stage_label_map[last_completed], "completed"
+
+    for s in stage_order:
+        if stage_statuses.get(s):
+            return stage_label_map[s], stage_statuses[s]
+
+    return "pile", "not_started"
+
+
 def normalize_zone_code(value):
     if not value:
         return None
@@ -109,6 +165,8 @@ def normalize_tracker_id(tracker_id):
     if not tracker_id:
         return None
     t = tracker_id.strip()
+    if t.lower().endswith("_boundary_spine"):
+        t = t[:-15]
     if t.lower().endswith("_boundary"):
         t = t[:-9]
     return t
@@ -146,15 +204,21 @@ def get_zone_folder_aliases(zone):
 
 def parse_sonrisa_folder_info(folder_name):
     if not folder_name:
-        return [], None
+        return [], None, None
     tokens = re.split(r"[_-]+", folder_name)
     zones = []
     current_letter = None
     date_str = None
+    time_token = None
     for token in tokens:
+        if date_str:
+            time_match = TIME_TOKEN_PATTERN.match(token)
+            if time_match:
+                time_token = token.lower()
+            continue
         if token.isdigit() and len(token) == 8:
             date_str = token
-            break
+            continue
         match = re.match(r"^([A-Za-z])(\d{1,2})$", token)
         if match:
             letter = match.group(1).upper()
@@ -168,6 +232,7 @@ def parse_sonrisa_folder_info(folder_name):
             number = token.zfill(2)
             letter = current_letter or "G"
             zones.append(f"{letter}{number}")
+            continue
     # Preserve order but unique
     seen = set()
     ordered = []
@@ -175,7 +240,51 @@ def parse_sonrisa_folder_info(folder_name):
         if z not in seen:
             seen.add(z)
             ordered.append(z)
-    return ordered, date_str
+    return ordered, date_str, time_token
+
+
+def parse_time_token_minutes(value):
+    if not value:
+        return None
+    match = TIME_TOKEN_PATTERN.match(value.strip())
+    if not match:
+        return None
+    hour = int(match.group(1))
+    suffix = match.group(2).lower()
+    hour = max(1, min(12, hour))
+    if suffix == "am":
+        return 0 if hour == 12 else hour * 60
+    return 12 * 60 if hour == 12 else (hour + 12) * 60
+
+
+def split_sonrisa_date_time(date_str):
+    if not date_str:
+        return None, None
+    parts = date_str.split("_", 1)
+    if len(parts) == 2:
+        return parts[0], parts[1]
+    return date_str, None
+
+
+def get_sonrisa_all_dates(project_layout_dir):
+    if not project_layout_dir or not os.path.exists(project_layout_dir):
+        return []
+    dates = {}
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        _, date_str, _ = parse_sonrisa_folder_info(item.strip())
+        if not date_str or not date_str.isdigit() or len(date_str) != 8:
+            continue
+        display = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        dates[date_str] = {
+            "date": date_str,
+            "folder": item,
+            "display": display,
+        }
+    ordered = sorted(dates.values(), key=lambda x: x["date"])
+    return ordered
 
 
 def get_available_projects():
@@ -274,10 +383,87 @@ def get_sonrisa_available_zones(project_layout_dir):
         item_path = os.path.join(project_layout_dir, item)
         if not os.path.isdir(item_path):
             continue
-        folder_zones, _ = parse_sonrisa_folder_info(item)
+        folder_zones, _, _ = parse_sonrisa_folder_info(item)
         for zone in folder_zones:
             zones.add(zone)
     return sorted(zones)
+
+
+def find_sonrisa_zone_csv(date_folder_path, zone):
+    if not date_folder_path or not zone:
+        return None
+    csv_path = None
+    trackers_root = os.path.join(date_folder_path, "trackers")
+    zone_folder_aliases = get_zone_folder_aliases(zone)
+    if os.path.isdir(trackers_root):
+        csv_names = ["tracker_status_v03.csv", "tracker_status_v02.csv", "tracker_status.csv"]
+        for alias in zone_folder_aliases:
+            for name in csv_names:
+                candidate = os.path.join(trackers_root, alias, name)
+                if os.path.exists(candidate):
+                    csv_path = candidate
+                    break
+            if csv_path:
+                break
+        if not csv_path:
+            for entry in os.listdir(trackers_root):
+                for name in csv_names:
+                    candidate = os.path.join(trackers_root, entry, name)
+                    if os.path.exists(candidate):
+                        csv_path = candidate
+                        break
+                if csv_path:
+                    break
+
+    if not csv_path and os.path.isdir(date_folder_path):
+        csv_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.csv')]
+        for alias in get_zone_aliases(zone):
+            for f in csv_candidates:
+                if f.lower().startswith(alias.lower()):
+                    csv_path = os.path.join(date_folder_path, f)
+                    break
+            if csv_path:
+                break
+        if not csv_path and csv_candidates:
+            csv_path = os.path.join(date_folder_path, csv_candidates[0])
+
+    return csv_path
+
+
+def get_sonrisa_zone_stage(project_layout_dir, zone, date_id=None):
+    date_folders = []
+    if date_id:
+        for item in os.listdir(project_layout_dir):
+            folder_zones, folder_date, _ = parse_sonrisa_folder_info(item.strip())
+            if zone in folder_zones and folder_date == date_id:
+                date_folders.append(os.path.join(project_layout_dir, item))
+    else:
+        dates = get_sonrisa_zone_dates(project_layout_dir, zone)
+        if not dates:
+            return None
+        latest = dates[-1]
+        date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, latest["date"])
+        if date_folder_path:
+            date_folders.append(date_folder_path)
+
+    if not date_folders:
+        return None
+
+    counts = {}
+    for folder in date_folders:
+        csv_path = find_sonrisa_zone_csv(folder, zone)
+        if not csv_path or not os.path.exists(csv_path):
+            continue
+        tracker_info = load_tracker_info(csv_path)
+        for info in tracker_info.values():
+            stage = (info.get("stage") or "").lower().replace(" ", "_")
+            if not stage:
+                continue
+            counts[stage] = counts.get(stage, 0) + 1
+
+    if not counts:
+        return None
+    return max(counts.items(), key=lambda item: item[1])[0]
 
 
 def get_sonrisa_zone_dates(project_layout_dir, zone):
@@ -289,14 +475,23 @@ def get_sonrisa_zone_dates(project_layout_dir, zone):
         item_path = os.path.join(project_layout_dir, item)
         if not os.path.isdir(item_path):
             continue
-        folder_zones, date_str = parse_sonrisa_folder_info(item.strip())
+        folder_zones, date_str, time_token = parse_sonrisa_folder_info(item.strip())
         if zone in folder_zones and date_str and date_str.isdigit() and len(date_str) == 8:
+            date_id = f"{date_str}_{time_token}" if time_token else date_str
+            display = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+            if time_token:
+                display = f"{display} {time_token}"
             dates.append({
-                'date': date_str,
+                'date': date_id,
                 'folder': item,
-                'display': f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                'display': display
             })
-    dates.sort(key=lambda x: x['date'])
+    dates.sort(
+        key=lambda x: (
+            split_sonrisa_date_time(x["date"])[0],
+            parse_time_token_minutes(split_sonrisa_date_time(x["date"])[1]) or 0,
+        )
+    )
     return dates
 
 
@@ -304,9 +499,12 @@ def find_sonrisa_date_folder(project_layout_dir, zone, date_str):
     zone = normalize_zone_code(zone)
     if not zone or not project_layout_dir or not os.path.exists(project_layout_dir):
         return None
+    target_date, target_time = split_sonrisa_date_time(date_str)
     for item in os.listdir(project_layout_dir):
-        folder_zones, folder_date = parse_sonrisa_folder_info(item.strip())
-        if zone in folder_zones and folder_date == date_str:
+        folder_zones, folder_date, folder_time = parse_sonrisa_folder_info(item.strip())
+        if zone in folder_zones and folder_date == target_date:
+            if target_time and folder_time and target_time != folder_time:
+                continue
             return os.path.join(project_layout_dir, item)
     return None
 
@@ -381,7 +579,7 @@ def compute_zone_overall_bounds(zone_bounds):
     }
 
 
-def build_sonrisa_block_map(zone_bounds, available_zones, image_size=(1600, 900), background_path=None):
+def build_sonrisa_block_map(zone_bounds, available_zones, zone_colors=None, image_size=(1600, 900), background_path=None):
     overall = compute_zone_overall_bounds(zone_bounds)
     if not zone_bounds or not overall:
         return None, None
@@ -400,6 +598,7 @@ def build_sonrisa_block_map(zone_bounds, available_zones, image_size=(1600, 900)
 
     draw = ImageDraw.Draw(img, "RGBA")
     available_set = set(available_zones or [])
+    zone_colors = zone_colors or {}
 
     try:
         font = ImageFont.load_default()
@@ -416,7 +615,9 @@ def build_sonrisa_block_map(zone_bounds, available_zones, image_size=(1600, 900)
         y1 = int(((max_lat - z_max_lat) / lat_range) * height)
         y2 = int(((max_lat - z_min_lat) / lat_range) * height)
 
-        if zone in available_set:
+        if zone in zone_colors:
+            fill = zone_colors[zone]
+        elif zone in available_set:
             fill = (120, 220, 120, 200)
         else:
             fill = (255, 255, 255, 255)
@@ -472,13 +673,31 @@ def load_tracker_boundaries(json_path):
             }
     return boundaries
 
+
+def reproject_boundary(boundary, src_crs, dst_crs):
+    if not boundary or not src_crs or not dst_crs:
+        return boundary
+    if str(src_crs) == str(dst_crs):
+        return boundary
+    lons = [boundary["min_lon"], boundary["max_lon"], boundary["max_lon"], boundary["min_lon"]]
+    lats = [boundary["min_lat"], boundary["min_lat"], boundary["max_lat"], boundary["max_lat"]]
+    xs, ys = rio_transform(src_crs, dst_crs, lons, lats)
+    return {
+        "min_lon": min(xs),
+        "max_lon": max(xs),
+        "min_lat": min(ys),
+        "max_lat": max(ys),
+    }
+
 def load_tracker_info(csv_path):
     """Load tracker stage and status from CSV.
 
-    Supports two formats:
+    Supports three formats:
     1) Old format with 'Current_stage' and 'Status' columns (tracker_webapp layout_data).
     2) New per-stage format with columns:
        'pile_stage', 'torque_tube_stage', 'module_rails_stage', 'solar_panel_stage'.
+    3) Installation format with columns:
+       'pile_installation', 'lower_journal_installation', ..., 'solar_module_installation'.
     """
     tracker_info = {}
     if not csv_path or not os.path.exists(csv_path):
@@ -495,9 +714,20 @@ def load_tracker_info(csv_path):
             and "module_rails_stage" in fieldnames
             and "solar_panel_stage" in fieldnames
         )
+        has_installation_cols = (
+            "pile_installation" in fieldnames
+            and "torque_tube_installation" in fieldnames
+            and "module_rail_installation" in fieldnames
+            and "solar_module_installation" in fieldnames
+        )
 
         for row in reader:
-            tracker_id = (row.get('Tracker ID') or '').strip()
+            tracker_id = (
+                row.get('Tracker ID')
+                or row.get('tracker_id')
+                or row.get('trackerID')
+                or ''
+            ).strip()
             if not tracker_id:
                 continue
 
@@ -510,6 +740,12 @@ def load_tracker_info(csv_path):
                 }
             elif has_per_stage_cols:
                 stage, status = compute_current_stage_from_row(row)
+                tracker_info[tracker_id] = {
+                    'stage': stage,
+                    'status': status,
+                }
+            elif has_installation_cols:
+                stage, status = compute_current_stage_from_installation_row(row)
                 tracker_info[tracker_id] = {
                     'stage': stage,
                     'status': status,
@@ -676,20 +912,16 @@ def get_layout_data(date_str):
 
         # Load JSON and CSV
         json_path = get_sonrisa_json_path(project_layout_dir)
-        csv_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.csv') and 'tracker' in f.lower()]
-        csv_path = None
-        for alias in zone_aliases:
-            for f in csv_candidates:
-                if f.lower().startswith(alias.lower()):
-                    csv_path = os.path.join(date_folder_path, f)
-                    break
-            if csv_path:
-                break
-        if not csv_path and csv_candidates:
-            csv_path = os.path.join(date_folder_path, csv_candidates[0])
+        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
 
         if not json_path or not os.path.exists(json_path):
             return jsonify({'error': 'JSON file not found'}), 404
+
+        with rasterio.open(tif_path) as src:
+            transform = list(src.transform)
+            width = src.width
+            height = src.height
+            tif_crs = src.crs
 
         boundaries_raw = load_tracker_boundaries(json_path)
         boundaries = {}
@@ -698,7 +930,8 @@ def get_layout_data(date_str):
                 continue
             normalized_id = normalize_tracker_id(tracker_id)
             if normalized_id:
-                boundaries[normalized_id] = b
+                reproj = reproject_boundary(b, "EPSG:4326", tif_crs)
+                boundaries[normalized_id] = reproj
 
         tracker_info_raw = load_tracker_info(csv_path) if csv_path and os.path.exists(csv_path) else {}
         tracker_info = {}
@@ -706,11 +939,6 @@ def get_layout_data(date_str):
             normalized_id = normalize_tracker_id(tracker_id)
             if normalized_id:
                 tracker_info[normalized_id] = info
-
-        with rasterio.open(tif_path) as src:
-            transform = list(src.transform)
-            width = src.width
-            height = src.height
 
         web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
         display_width = None
@@ -904,9 +1132,16 @@ def get_sonrisa_zones():
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
+    date_id = request.args.get("date")
     json_path = get_sonrisa_json_path(project_layout_dir)
     zone_bounds = get_sonrisa_zone_bounds(json_path)
     available_zones = get_sonrisa_available_zones(project_layout_dir)
+    zone_stage = {
+        zone: get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        for zone in available_zones
+    }
+    if date_id:
+        available_zones = [zone for zone in available_zones if zone_stage.get(zone)]
 
     if not zone_bounds:
         return jsonify({'error': 'Sonrisa JSON boundaries not found'}), 404
@@ -925,7 +1160,8 @@ def get_sonrisa_zones():
                     'max_lat': bounds[2],
                     'max_lon': bounds[3]
                 },
-                'available': zone in available_zones
+                'available': zone in available_zones,
+                'stage': zone_stage.get(zone)
             }
             for zone, bounds in sorted(zone_bounds.items())
         ],
@@ -941,11 +1177,25 @@ def get_sonrisa_block_map():
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
+    date_id = request.args.get("date")
     existing_map = os.path.join(project_layout_dir, "sonrisa_block_map.jpg")
     json_path = get_sonrisa_json_path(project_layout_dir)
     zone_bounds = get_sonrisa_zone_bounds(json_path)
     available_zones = get_sonrisa_available_zones(project_layout_dir)
-    img, _ = build_sonrisa_block_map(zone_bounds, available_zones, background_path=existing_map)
+    zone_colors = {}
+    for zone in available_zones:
+        stage = get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        color = STAGE_COLORS.get(stage)
+        if color:
+            zone_colors[zone] = color
+    if date_id:
+        available_zones = [zone for zone in available_zones if zone in zone_colors]
+    img, _ = build_sonrisa_block_map(
+        zone_bounds,
+        available_zones,
+        zone_colors=zone_colors,
+        background_path=existing_map
+    )
     if img is None:
         return jsonify({'error': 'Unable to build block map'}), 500
     buffer = BytesIO()
@@ -955,6 +1205,16 @@ def get_sonrisa_block_map():
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     response.headers['Pragma'] = 'no-cache'
     return response
+
+
+@app.route('/api/sonrisa/dates')
+def get_sonrisa_dates():
+    project = get_project_from_request()
+    if project != "Sonrisa":
+        return jsonify({'error': 'Invalid project'}), 400
+    project_layout_dir = get_layout_dir(project)
+    dates = get_sonrisa_all_dates(project_layout_dir)
+    return jsonify({'dates': dates})
 
 
 @app.route('/api/sonrisa/image/<zone>/<date_str>')
@@ -1041,7 +1301,7 @@ def get_sonrisa_image(zone, date_str):
 def get_tracker_image(date_str, tracker_id):
     """Get individual tracker TIFF as base64 for a specific date"""
     # Find tracker TIFF - try multiple locations
-    tracker_tif = f"{tracker_id}_boundary.tif"
+    tracker_tif = f"{tracker_id}_boundary_spine.tif"
     
     # Find the date folder to get the date_match
     project = get_project_from_request()
@@ -1063,21 +1323,26 @@ def get_tracker_image(date_str, tracker_id):
     if project == "Sonrisa":
         if tracker_id.lower().endswith('.tif'):
             tracker_filename = tracker_id
+        elif tracker_id.lower().endswith('_boundary_spine'):
+            tracker_filename = f"{tracker_id}.tif"
         elif tracker_id.lower().endswith('_boundary'):
             tracker_filename = f"{tracker_id}.tif"
         else:
-            tracker_filename = f"{tracker_id}_boundary.tif"
+            tracker_filename = f"{tracker_id}_boundary_spine.tif"
         zone_folder_aliases = get_zone_folder_aliases(zone)
         tracker_paths = []
         for alias in zone_folder_aliases:
             tracker_paths.extend([
                 os.path.join(date_folder_path, "trackers", alias, tracker_filename),
                 os.path.join(date_folder_path, "trackers", alias, f"{tracker_id}.tif"),
+                os.path.join(date_folder_path, "trackers", alias, f"{tracker_id}_boundary_spine.tif"),
                 os.path.join(date_folder_path, "trackers", alias, f"{tracker_id}_boundary.tif"),
             ])
         tracker_paths.extend([
             os.path.join(date_folder_path, "trackers", tracker_filename),
             os.path.join(date_folder_path, tracker_filename),
+            os.path.join(date_folder_path, f"{tracker_id}_boundary_spine.tif"),
+            os.path.join(date_folder_path, f"{tracker_id}_boundary.tif"),
         ])
         for path in tracker_paths:
             if os.path.exists(path):
@@ -1199,6 +1464,7 @@ def handle_click():
             # Convert pixel coordinates to geographic coordinates
             # Note: rasterio uses (row, col) = (y, x)
             lon, lat = src.xy(y, x)
+            tif_crs = src.crs
         
         # Load boundaries
         if project == "Sonrisa":
@@ -1216,7 +1482,8 @@ def handle_click():
                     continue
                 normalized_id = normalize_tracker_id(tracker_id)
                 if normalized_id:
-                    normalized_boundaries[normalized_id] = b
+                    reproj = reproject_boundary(b, "EPSG:4326", tif_crs)
+                    normalized_boundaries[normalized_id] = reproj
             boundaries = normalized_boundaries
         
         # Find tracker
