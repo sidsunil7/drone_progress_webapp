@@ -26,10 +26,10 @@ SONRISA_JSON_PATH = os.environ.get(
 ZONE_CODE_PATTERN = re.compile(r"^([A-Za-z])(\d{1,2})")
 TIME_TOKEN_PATTERN = re.compile(r"^(\d{1,2})(am|pm)$", re.IGNORECASE)
 STAGE_COLORS = {
-    "pile": (128, 0, 128, 200),
-    "torque_tube": (200, 150, 255, 200),
-    "module_rails": (0, 0, 139, 200),
-    "solar_panel": (135, 206, 250, 200),
+    "pile": (200, 150, 255, 200),      # Light purple
+    "torque_tube": (128, 0, 128, 200),  # Dark purple
+    "module_rails": (135, 206, 250, 200),  # Light blue
+    "solar_panel": (0, 0, 139, 200),    # Dark blue
 }
 
 
@@ -210,6 +210,7 @@ def parse_sonrisa_folder_info(folder_name):
     current_letter = None
     date_str = None
     time_token = None
+    past_zone_section = False
     for token in tokens:
         if date_str:
             time_match = TIME_TOKEN_PATTERN.match(token)
@@ -218,6 +219,11 @@ def parse_sonrisa_folder_info(folder_name):
             continue
         if token.isdigit() and len(token) == 8:
             date_str = token
+            continue
+        if "m" in token.lower() or token.lower() in ("ovrlp", "overlp"):
+            past_zone_section = True
+            continue
+        if past_zone_section:
             continue
         match = re.match(r"^([A-Za-z])(\d{1,2})$", token)
         if match:

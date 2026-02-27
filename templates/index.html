@@ -237,27 +237,43 @@
         }
         
         .stage-pile {
-            background: rgba(128, 0, 128, 0.3);
-            color: #800080;
-            border: 1px solid #800080;
-        }
-        
-        .stage-torque_tube {
             background: rgba(200, 150, 255, 0.3);
             color: #8B5FBF;
             border: 1px solid #C896FF;
         }
         
+        .stage-torque_tube {
+            background: rgba(128, 0, 128, 0.3);
+            color: #800080;
+            border: 1px solid #800080;
+        }
+        
         .stage-module_rails {
+            background: rgba(135, 206, 250, 0.3);
+            color: #1E90FF;
+            border: 1px solid #87CEFA;
+        }
+        
+        .stage-solar_panel {
             background: rgba(0, 0, 139, 0.3);
             color: #00008B;
             border: 1px solid #00008B;
         }
-        
-        .stage-solar_panel {
-            background: rgba(135, 206, 250, 0.3);
-            color: #1E90FF;
-            border: 1px solid #87CEFA;
+
+        .site-overview-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+        }
+        .site-overview-table th,
+        .site-overview-table td {
+            padding: 4px 6px;
+            border-bottom: 1px solid #eee;
+            text-align: right;
+        }
+        .site-overview-table th:first-child,
+        .site-overview-table td:first-child {
+            text-align: left;
         }
         
         .timeline-container {
@@ -889,19 +905,26 @@
                 </button>
             </div>
             
-            <details class="filter-container" open>
+            <details class="filter-container" id="siteOverviewSection" open>
+                <summary class="filter-summary">Site Overview</summary>
+                <div class="filter-content">
+                    <div id="siteOverviewTable"></div>
+                    <div class="site-summary-note" style="font-size:11px;color:#666;margin-top:6px;">
+                        Completion % based on trackers with Modules completed.
+                    </div>
+                </div>
+            </details>
+            <details class="filter-container" id="filterSection" open>
                 <summary class="filter-summary">Filters</summary>
                 <div class="filter-content">
                     <div class="filter-section">
                         <div class="filter-section-title">Stages</div>
                         <div class="filter-list" id="stageFilters"></div>
                     </div>
-                    
                     <div class="filter-section">
                         <div class="filter-section-title">Statuses</div>
                         <div class="filter-list" id="statusFilters"></div>
                     </div>
-                    
                     <div class="filter-summary-text" id="filterSummary"></div>
                 </div>
             </details>
@@ -1009,6 +1032,11 @@
                 // Precompute summaries for all dates (for charts/table)
                 await computeAllDateSummaries();
 
+                const siteOverviewSection = document.getElementById('siteOverviewSection');
+                const filterSection = document.getElementById('filterSection');
+                if (siteOverviewSection) siteOverviewSection.style.display = 'none';
+                if (filterSection) filterSection.style.display = 'block';
+
                 // Initialize manpower config with default values for each working day (can be edited later)
                 initializeManpowerConfig();
 
@@ -1065,6 +1093,10 @@
                 if (layoutWrapper) layoutWrapper.style.display = 'none';
                 if (timelineContainer) timelineContainer.style.display = 'none';
                 isZonePickerActive = true;
+                const siteOverviewSection = document.getElementById('siteOverviewSection');
+                const filterSection = document.getElementById('filterSection');
+                if (siteOverviewSection) siteOverviewSection.style.display = 'block';
+                if (filterSection) filterSection.style.display = 'none';
                 renderStageFilters();
                 renderStatusFilters();
                 if (backBtn) {
@@ -1168,8 +1200,12 @@
             selectedZone = zone;
             const zonePicker = document.getElementById('sonrisaZonePicker');
             const layoutWrapper = document.getElementById('layoutWrapper');
+            const siteOverviewSection = document.getElementById('siteOverviewSection');
+            const filterSection = document.getElementById('filterSection');
             if (zonePicker) zonePicker.style.display = 'none';
             if (layoutWrapper) layoutWrapper.style.display = 'flex';
+            if (siteOverviewSection) siteOverviewSection.style.display = 'none';
+            if (filterSection) filterSection.style.display = 'block';
             isZonePickerActive = false;
             renderStageFilters();
             renderStatusFilters();
@@ -1252,8 +1288,15 @@
                 }
             }
             isZonePickerActive = true;
+            const siteOverviewSection = document.getElementById('siteOverviewSection');
+            const filterSection = document.getElementById('filterSection');
+            if (siteOverviewSection) siteOverviewSection.style.display = 'block';
+            if (filterSection) filterSection.style.display = 'none';
             renderStageFilters();
             renderStatusFilters();
+            if (availableDates.length > 0) {
+                renderSiteOverviewTable(availableDates[0].date);
+            }
 
             const mapTab = document.querySelector('.view-tab[data-view="map"]');
             if (mapTab) {
@@ -1272,6 +1315,67 @@
             if (blockMapImg) {
                 blockMapImg.src = `/api/sonrisa/block_map?date=${encodeURIComponent(dateId)}&v=${Date.now()}`;
             }
+            await renderSiteOverviewTable(dateId);
+        }
+
+        async function renderSiteOverviewTable(dateId) {
+            const container = document.getElementById('siteOverviewTable');
+            if (!container || PROJECT !== 'Sonrisa') return;
+
+            const zonesResp = await fetch(`/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`);
+            const zonesData = await zonesResp.json();
+            if (zonesData.error || !zonesData.available_zones) {
+                container.innerHTML = '<div class="filter-summary-text">No zone data for this date.</div>';
+                return;
+            }
+
+            const zones = zonesData.available_zones;
+            const rows = [];
+            for (const zone of zones) {
+                const resp = await fetch(`/api/layout/${encodeURIComponent(dateId)}?zone=${encodeURIComponent(zone)}`);
+                const ld = await resp.json();
+                if (ld.error || !ld.tracker_info) continue;
+                const total = Object.keys(ld.tracker_info).length;
+                let completed = 0;
+                Object.values(ld.tracker_info).forEach(info => {
+                    const stage = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
+                    const status = (info.status || '').toLowerCase().replace(/\s+/g, '_');
+                    if (stage === 'solar_panel' && status === 'completed') completed += 1;
+                });
+                const pct = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';
+                rows.push({ zone, total, completed, pct });
+            }
+
+            if (rows.length === 0) {
+                container.innerHTML = '<div class="filter-summary-text">No tracker data for this date.</div>';
+                return;
+            }
+
+            const completedZones = rows.filter(r => r.pct === '100.0').length;
+            const summaryHtml = `
+                <div class="site-overview-summary" style="font-size:12px;margin-bottom:8px;line-height:1.6;">
+                    <div>Total Number of Zones: 54</div>
+                    <div>Available zones: ${rows.length}</div>
+                    <div>Number of Completed Zones: ${completedZones}</div>
+                </div>
+            `;
+
+            const header = `
+                <table class="site-overview-table">
+                    <thead>
+                        <tr>
+                            <th>Zone</th>
+                            <th>Total</th>
+                            <th>Completed</th>
+                            <th>%</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+            const body = rows.map(r =>
+                `<tr><td>${r.zone}</td><td>${r.total}</td><td>${r.completed}</td><td>${r.pct}%</td></tr>`
+            ).join('');
+            container.innerHTML = summaryHtml + header + body + '</tbody></table>';
         }
 
         function returnToProjectSelection() {
@@ -2659,10 +2763,10 @@
         
         function getStageColorRGB(stage) {
             const colors = {
-                'pile': '#800080',           // Dark purple
-                'torque_tube': '#C896FF',    // Light purple
-                'module_rails': '#00008B',    // Dark blue
-                'solar_panel': '#87CEFA'     // Light blue
+                'pile': '#C896FF',           // Light purple
+                'torque_tube': '#800080',    // Dark purple
+                'module_rails': '#87CEFA',   // Light blue
+                'solar_panel': '#00008B'     // Dark blue
             };
             return colors[stage?.toLowerCase().replace(/\s+/g, '_')] || '#666';
         }
@@ -3104,14 +3208,14 @@
         
         function getStageColor(stageKey) {
             const colors = {
-                'pile': '#800080',
-                'torque_tube': '#C896FF',
-                'module_rails': '#00008B',
-                'solar_panel': '#87CEFA'
+                'pile': '#C896FF',
+                'torque_tube': '#800080',
+                'module_rails': '#87CEFA',
+                'solar_panel': '#00008B'
             };
             return colors[stageKey] || '#666';
         }
-        
+
         function getStatusColor(statusKey) {
             const colors = {
                 'not_started': '#FF0000',
