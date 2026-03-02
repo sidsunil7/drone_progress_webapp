@@ -1223,6 +1223,52 @@ def get_sonrisa_dates():
     return jsonify({'dates': dates})
 
 
+@app.route('/api/sonrisa/site_overview')
+def get_sonrisa_site_overview():
+    """Return site-level zone summary (total, completed, %) for a date. CSV-only, no TIFFs."""
+    project = get_project_from_request()
+    if project != "Sonrisa":
+        return jsonify({'error': 'Invalid project'}), 400
+    date_id = request.args.get("date")
+    if not date_id:
+        return jsonify({'error': 'Date required'}), 400
+
+    project_layout_dir = get_layout_dir(project)
+    available_zones = get_sonrisa_available_zones(project_layout_dir)
+    zone_stage = {
+        zone: get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        for zone in available_zones
+    }
+    available_zones = [z for z in available_zones if zone_stage.get(z)]
+
+    rows = []
+    for zone in available_zones:
+        date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_id)
+        if not date_folder_path:
+            continue
+        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        if not csv_path or not os.path.exists(csv_path):
+            continue
+        tracker_info = load_tracker_info(csv_path)
+        total = len(tracker_info)
+        completed = 0
+        for info in tracker_info.values():
+            stage = (info.get("stage") or "").lower().replace(" ", "_")
+            status = (info.get("status") or "").lower().replace(" ", "_")
+            if stage == "solar_panel" and status == "completed":
+                completed += 1
+        pct = (completed / total * 100) if total > 0 else 0.0
+        rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
+
+    completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
+    return jsonify({
+        "total_zones": 54,
+        "available_count": len(rows),
+        "completed_zones_count": completed_zones,
+        "zones": rows,
+    })
+
+
 @app.route('/api/sonrisa/image/<zone>/<date_str>')
 def get_sonrisa_image(zone, date_str):
     project = get_project_from_request()

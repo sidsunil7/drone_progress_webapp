@@ -1322,40 +1322,26 @@
             const container = document.getElementById('siteOverviewTable');
             if (!container || PROJECT !== 'Sonrisa') return;
 
-            const zonesResp = await fetch(`/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`);
-            const zonesData = await zonesResp.json();
-            if (zonesData.error || !zonesData.available_zones) {
-                container.innerHTML = '<div class="filter-summary-text">No zone data for this date.</div>';
+            const resp = await fetch(`/api/sonrisa/site_overview?date=${encodeURIComponent(dateId)}`);
+            const data = await resp.json();
+            if (data.error || !data.zones) {
+                container.innerHTML = '<div class="filter-summary-text">' + (data.error || 'No zone data for this date.') + '</div>';
                 return;
             }
 
-            const zones = zonesData.available_zones;
-            const rows = [];
-            for (const zone of zones) {
-                const resp = await fetch(`/api/layout/${encodeURIComponent(dateId)}?zone=${encodeURIComponent(zone)}`);
-                const ld = await resp.json();
-                if (ld.error || !ld.tracker_info) continue;
-                const total = Object.keys(ld.tracker_info).length;
-                let completed = 0;
-                Object.values(ld.tracker_info).forEach(info => {
-                    const stage = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
-                    const status = (info.status || '').toLowerCase().replace(/\s+/g, '_');
-                    if (stage === 'solar_panel' && status === 'completed') completed += 1;
-                });
-                const pct = total > 0 ? ((completed / total) * 100).toFixed(1) : '0.0';
-                rows.push({ zone, total, completed, pct });
-            }
-
+            const rows = data.zones;
             if (rows.length === 0) {
                 container.innerHTML = '<div class="filter-summary-text">No tracker data for this date.</div>';
                 return;
             }
 
-            const completedZones = rows.filter(r => r.pct === '100.0').length;
+            const totalZones = data.total_zones ?? 54;
+            const availableCount = data.available_count ?? rows.length;
+            const completedZones = data.completed_zones_count ?? rows.filter(r => r.pct === '100.0').length;
             const summaryHtml = `
                 <div class="site-overview-summary" style="font-size:12px;margin-bottom:8px;line-height:1.6;">
-                    <div>Total Number of Zones: 54</div>
-                    <div>Available zones: ${rows.length}</div>
+                    <div>Total Number of Zones: ${totalZones}</div>
+                    <div>Available zones: ${availableCount}</div>
                     <div>Number of Completed Zones: ${completedZones}</div>
                 </div>
             `;
