@@ -971,6 +971,11 @@
         let selectedStage = null;
         let selectedStatus = null;
 
+        // Site-level stage counts (zone picker view, summed across all zones)
+        let siteStageCounts = {};
+        let siteStageStatusCounts = {};
+        let siteTotalTrackers = 0;
+
         // Sonrisa zone selection state
         let selectedZone = null;
         let zoneMeta = null;
@@ -1096,7 +1101,7 @@
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
                 const filterSection = document.getElementById('filterSection');
                 if (siteOverviewSection) siteOverviewSection.style.display = 'block';
-                if (filterSection) filterSection.style.display = 'none';
+                if (filterSection) filterSection.style.display = 'block';
                 renderStageFilters();
                 renderStatusFilters();
                 if (backBtn) {
@@ -1288,10 +1293,12 @@
                 }
             }
             isZonePickerActive = true;
+            selectedStage = null;
+            selectedStatus = null;
             const siteOverviewSection = document.getElementById('siteOverviewSection');
             const filterSection = document.getElementById('filterSection');
             if (siteOverviewSection) siteOverviewSection.style.display = 'block';
-            if (filterSection) filterSection.style.display = 'none';
+            if (filterSection) filterSection.style.display = 'block';
             renderStageFilters();
             renderStatusFilters();
             if (availableDates.length > 0) {
@@ -1362,6 +1369,18 @@
                 `<tr><td>${r.zone}</td><td>${r.total}</td><td>${r.completed}</td><td>${r.pct}%</td></tr>`
             ).join('');
             container.innerHTML = summaryHtml + header + body + '</tbody></table>';
+
+            // Store site-level stage counts for zone picker filter
+            if (data.stage_counts && data.stage_status_counts) {
+                siteStageCounts = data.stage_counts;
+                siteStageStatusCounts = data.stage_status_counts;
+                siteTotalTrackers = Object.values(data.stage_counts).reduce((a, b) => a + b, 0);
+                if (isZonePickerActive) {
+                    renderStageFilters();
+                    renderStatusFilters();
+                    updateFilterSummary();
+                }
+            }
         }
 
         function returnToProjectSelection() {
@@ -3216,12 +3235,21 @@
             if (!container) return;
             const filterContainer = container.closest('.filter-container');
             if (filterContainer) {
-                filterContainer.classList.toggle('legend-only', isZonePickerActive);
+                const useSiteData = isZonePickerActive && siteTotalTrackers > 0;
+                filterContainer.classList.toggle('legend-only', isZonePickerActive && !useSiteData);
             }
 
-            if (!layoutData || !layoutData.tracker_info) {
+            const counts = isZonePickerActive ? siteStageCounts : stageCounts;
+            const total = isZonePickerActive ? siteTotalTrackers : totalTrackers;
+            const hasData = isZonePickerActive ? (siteTotalTrackers > 0) : (layoutData && layoutData.tracker_info);
+
+            if (!hasData) {
                 if (!isZonePickerActive) {
                     container.innerHTML = '<p class="filter-hint">Tracker data unavailable.</p>';
+                    return;
+                }
+                if (isZonePickerActive && siteTotalTrackers === 0) {
+                    container.innerHTML = '<p class="filter-hint">Select a date to view site-level stage counts.</p>';
                     return;
                 }
             }
@@ -3229,8 +3257,8 @@
             container.innerHTML = '';
 
             stageDefinitions.forEach(stage => {
-                const count = stageCounts[stage.key] || 0;
-                const percent = totalTrackers > 0 ? ((count / totalTrackers) * 100).toFixed(0) : 0;
+                const count = counts[stage.key] || 0;
+                const percent = total > 0 ? ((count / total) * 100).toFixed(0) : 0;
                 const button = document.createElement('button');
                 button.className = `filter-button stage-button ${selectedStage === stage.key ? 'active' : ''}`;
                 if (count === 0) {
@@ -3238,8 +3266,8 @@
                 }
                 button.dataset.stage = stage.key;
                 const legendColor = getStageColor(stage.key);
-                const labelText = isZonePickerActive ? stage.label : `${stage.label} (${percent}%)`;
-                const countText = isZonePickerActive ? '' : `<span class="filter-count">${count}</span>`;
+                const labelText = `${stage.label} (${percent}%)`;
+                const countText = `<span class="filter-count">${count}</span>`;
                 button.innerHTML = `
                     <span>
                         <span class="filter-legend rectangle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
@@ -3247,9 +3275,7 @@
                     </span>
                     ${countText}
                 `;
-                if (!isZonePickerActive) {
-                    button.addEventListener('click', () => handleStageSelection(stage.key));
-                }
+                button.addEventListener('click', () => handleStageSelection(stage.key));
                 container.appendChild(button);
             });
         }
@@ -3257,15 +3283,18 @@
         function renderStatusFilters() {
             const container = document.getElementById('statusFilters');
             if (!container) return;
-            if (!selectedStage && !isZonePickerActive) {
+            if (!selectedStage) {
                 container.innerHTML = '<p class="filter-hint">Select a stage to view status counts.</p>';
                 return;
             }
 
+            const statusCounts = isZonePickerActive ? siteStageStatusCounts : stageStatusCounts;
+            const total = isZonePickerActive ? siteTotalTrackers : totalTrackers;
+
             container.innerHTML = '';
             statusDefinitions.forEach(status => {
-                const count = stageStatusCounts[selectedStage]?.[status.key] || 0;
-                const percent = totalTrackers > 0 ? ((count / totalTrackers) * 100).toFixed(0) : 0;
+                const count = statusCounts[selectedStage]?.[status.key] || 0;
+                const percent = total > 0 ? ((count / total) * 100).toFixed(0) : 0;
                 const button = document.createElement('button');
                 button.className = `filter-button status-button ${selectedStatus === status.key ? 'active' : ''}`;
                 if (count === 0) {
@@ -3273,8 +3302,8 @@
                 }
                 button.dataset.status = status.key;
                 const legendColor = getStatusColor(status.key);
-                const labelText = isZonePickerActive ? status.label : `${status.label} (${percent}%)`;
-                const countText = isZonePickerActive ? '' : `<span class="filter-count">${count}</span>`;
+                const labelText = `${status.label} (${percent}%)`;
+                const countText = `<span class="filter-count">${count}</span>`;
                 button.innerHTML = `
                     <span>
                         <span class="filter-legend circle" style="background-color: ${legendColor}; border: 1px solid ${legendColor};"></span>
@@ -3282,9 +3311,7 @@
                     </span>
                     ${countText}
                 `;
-                if (!isZonePickerActive) {
-                    button.addEventListener('click', () => handleStatusSelection(status.key));
-                }
+                button.addEventListener('click', () => handleStatusSelection(status.key));
                 container.appendChild(button);
             });
         }
@@ -3311,19 +3338,25 @@
             if (!summaryDiv) return;
             
             if (!selectedStage) {
-                summaryDiv.textContent = 'Select a stage to view tracker counts.';
+                summaryDiv.textContent = isZonePickerActive
+                    ? 'Site overview: Select a stage to view tracker counts across all zones.'
+                    : 'Select a stage to view tracker counts.';
                 return;
             }
             
+            const counts = isZonePickerActive ? siteStageCounts : stageCounts;
+            const statusCounts = isZonePickerActive ? siteStageStatusCounts : stageStatusCounts;
+            const total = isZonePickerActive ? siteTotalTrackers : totalTrackers;
+            
             const stageLabel = formatStageLabel(selectedStage);
-            const stageCount = stageCounts[selectedStage] || 0;
-            const stagePercent = totalTrackers > 0 ? ((stageCount / totalTrackers) * 100).toFixed(1) : 0;
+            const stageCount = counts[selectedStage] || 0;
+            const stagePercent = total > 0 ? ((stageCount / total) * 100).toFixed(1) : 0;
             let summaryText = `${stageLabel}: ${stageCount} (${stagePercent}%)`;
             
             if (selectedStatus) {
                 const statusLabel = formatStatusLabel(selectedStatus);
-                const statusCount = stageStatusCounts[selectedStage]?.[selectedStatus] || 0;
-                const statusPercent = totalTrackers > 0 ? ((statusCount / totalTrackers) * 100).toFixed(1) : 0;
+                const statusCount = statusCounts[selectedStage]?.[selectedStatus] || 0;
+                const statusPercent = total > 0 ? ((statusCount / total) * 100).toFixed(1) : 0;
                 summaryText += ` • ${statusLabel}: ${statusCount} (${statusPercent}%)`;
             }
             

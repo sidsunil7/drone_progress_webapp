@@ -1242,6 +1242,8 @@ def get_sonrisa_site_overview():
     available_zones = [z for z in available_zones if zone_stage.get(z)]
 
     rows = []
+    stage_counts = {}
+    stage_status_counts = {}  # {stage: {status: count}}
     for zone in available_zones:
         date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_id)
         if not date_folder_path:
@@ -1257,6 +1259,12 @@ def get_sonrisa_site_overview():
             status = (info.get("status") or "").lower().replace(" ", "_")
             if stage == "solar_panel" and status == "completed":
                 completed += 1
+            if stage:
+                stage_counts[stage] = stage_counts.get(stage, 0) + 1
+                if stage not in stage_status_counts:
+                    stage_status_counts[stage] = {}
+                status_norm = (status or "not_started").strip().lower().replace(" ", "_") or "not_started"
+                stage_status_counts[stage][status_norm] = stage_status_counts[stage].get(status_norm, 0) + 1
         pct = (completed / total * 100) if total > 0 else 0.0
         rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
 
@@ -1266,6 +1274,8 @@ def get_sonrisa_site_overview():
         "available_count": len(rows),
         "completed_zones_count": completed_zones,
         "zones": rows,
+        "stage_counts": stage_counts,
+        "stage_status_counts": stage_status_counts,
     })
 
 
