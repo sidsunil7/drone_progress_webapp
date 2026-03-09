@@ -1,0 +1,114 @@
+name: Dev testing deploy - droneprogressviewer
+
+on:
+  workflow_dispatch:
+    inputs:
+      testing_mode:
+        description: "Set ON only when actively testing"
+        required: true
+        type: choice
+        default: "OFF"
+        options:
+          - "OFF"
+          - "ON"
+
+concurrency:
+  group: dev-testing-droneprogressviewer
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      deploy_enabled: ${{ steps.gate.outputs.deploy_enabled }}
+    steps:
+      - id: gate
+        name: Validate branch and testing mode
+        run: |
+          if [ "${{ github.ref_name }}" != "dev" ]; then
+            echo "This workflow can run only from the dev branch."
+            exit 1
+          fi
+
+          if [ "${{ github.event.inputs.testing_mode }}" = "ON" ]; then
+            echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Testing mode is ON. Deploy will proceed."
+          else
+            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Testing mode is OFF. Workflow will exit without deploy."
+          fi
+
+  build:
+    runs-on: ubuntu-latest
+    needs: gate
+    if: needs.gate.outputs.deploy_enabled == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python version
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Create virtualenv and install dependencies
+        run: |
+          python -m venv antenv
+          source antenv/bin/activate
+          pip install -r requirements.txt
+
+      - name: Upload artifact for deployment jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-app-dev-test
+          path: |
+            .
+            !antenv/
+            !layout_data/
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs:
+      - gate
+      - build
+    if: needs.gate.outputs.deploy_enabled == 'true'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Download artifact from build job
+        uses: actions/download-artifact@v4
+        with:
+          name: python-app-dev-test
+
+      - name: Login to Azure
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_18847EEF6ECB452A9CB615D17213CA24 }}
+          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_DC7CA9EAF5224E038FF0717997D167CD }}
+          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BF67602486FE4C8DA90849AE4AED4B20 }}
+
+      - name: Wait for app to be ready
+        run: |
+          echo "Waiting 30 seconds before deployment..."
+          sleep 30
+
+      - name: Deploy to Azure Web App (manual dev testing)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: "droneprogressviewer"
+          slot-name: "Production"
+          retry-timeout: 600
+
+  close-testing-note:
+    runs-on: ubuntu-latest
+    needs:
+      - gate
+      - deploy
+    if: always()
+    steps:
+      - name: Testing mode close reminder
+        run: |
+          echo "Dev testing run finished."
+          echo "Set testing_mode=OFF next run, or disable this workflow in Actions after testing."
