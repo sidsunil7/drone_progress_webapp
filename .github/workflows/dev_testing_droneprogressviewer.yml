@@ -11,6 +11,11 @@ on:
         options:
           - "OFF"
           - "ON"
+      deploy_ref:
+        description: "Branch to deploy for testing"
+        required: true
+        type: string
+        default: "dev"
 
 concurrency:
   group: dev-testing-droneprogressviewer
@@ -25,14 +30,14 @@ jobs:
       - id: gate
         name: Validate branch and testing mode
         run: |
-          if [ "${{ github.ref_name }}" != "dev" ]; then
-            echo "This workflow can run only from the dev branch."
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            echo "Run this workflow from main (OIDC is configured on main)."
             exit 1
           fi
 
           if [ "${{ github.event.inputs.testing_mode }}" = "ON" ]; then
             echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
-            echo "Testing mode is ON. Deploy will proceed."
+            echo "Testing mode is ON. Deploy will proceed using ref '${{ github.event.inputs.deploy_ref }}'."
           else
             echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
             echo "Testing mode is OFF. Workflow will exit without deploy."
@@ -46,6 +51,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.deploy_ref }}
 
       - name: Set up Python version
         uses: actions/setup-python@v5
