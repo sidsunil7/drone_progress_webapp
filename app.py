@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import base64
 import re
+import time
 
 app = Flask(__name__)
 
@@ -31,6 +32,14 @@ STAGE_COLORS = {
     "module_rails": (135, 206, 250, 200),  # Light blue
     "solar_panel": (0, 0, 139, 200),    # Dark blue
 }
+
+
+def log_timing(label, start_time, **context):
+    """Print consistent timing logs for image/TIFF operations."""
+    elapsed_ms = (time.perf_counter() - start_time) * 1000
+    context_items = [f"{k}={v}" for k, v in context.items() if v is not None]
+    context_suffix = f" ({', '.join(context_items)})" if context_items else ""
+    print(f"[Timing] {label}: {elapsed_ms:.1f}ms{context_suffix}")
 
 
 def normalize_status(status):
@@ -764,6 +773,7 @@ def load_tracker_info(csv_path):
 
 def tif_to_base64(tif_path, max_size=2000):
     """Convert TIFF to base64 PNG for web display"""
+    convert_start = time.perf_counter()
     try:
         Image.MAX_IMAGE_PIXELS = 2_000_000_000  # Increase limit for large images
         
@@ -813,8 +823,16 @@ def tif_to_base64(tif_path, max_size=2000):
             
             buffer = BytesIO()
             img.save(buffer, format='PNG')
+            log_timing(
+                "tif_to_base64",
+                convert_start,
+                tif=os.path.basename(tif_path),
+                width=img.width,
+                height=img.height,
+            )
             return base64.b64encode(buffer.getvalue()).decode('utf-8')
     except Exception as e:
+        log_timing("tif_to_base64_failed", convert_start, tif=os.path.basename(tif_path))
         print(f"Error converting TIFF: {e}")
         import traceback
         traceback.print_exc()
@@ -873,6 +891,7 @@ def get_dates():
 @app.route('/api/layout/<date_str>')
 def get_layout_data(date_str):
     """Get layout data (image, boundaries, tracker info) for a specific date"""
+    request_start = time.perf_counter()
     # Find the date folder
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
@@ -923,11 +942,13 @@ def get_layout_data(date_str):
         if not json_path or not os.path.exists(json_path):
             return jsonify({'error': 'JSON file not found'}), 404
 
+        tif_meta_start = time.perf_counter()
         with rasterio.open(tif_path) as src:
             transform = list(src.transform)
             width = src.width
             height = src.height
             tif_crs = src.crs
+        log_timing("layout_tif_metadata", tif_meta_start, date=date_str, zone=zone, tif=zone_tif)
 
         boundaries_raw = load_tracker_boundaries(json_path)
         boundaries = {}
@@ -970,6 +991,7 @@ def get_layout_data(date_str):
             'image_scale_factor': (width / display_width) if display_width else 1.0,
             'date': date_str
         }
+        log_timing("get_layout_data", request_start, date=date_str, zone=zone, project=project)
         return jsonify(response_data)
     
     # Find the base image (without overlay)
@@ -1016,10 +1038,12 @@ def get_layout_data(date_str):
         if not os.path.exists(tif_path):
             return jsonify({'error': 'TIFF file not found'}), 404
     
+    tif_meta_start = time.perf_counter()
     with rasterio.open(tif_path) as src:
         transform = list(src.transform)
         width = src.width
         height = src.height
+    log_timing("layout_tif_metadata", tif_meta_start, date=date_str, project=project, tif=os.path.basename(tif_path))
     
     # Get base image dimensions
     base_image_path = os.path.join(date_folder_path, base_image_name)
@@ -1066,11 +1090,13 @@ def get_layout_data(date_str):
     if overlay_image_name:
         response_data['overlay_image'] = f'/api/image/layout/{date_str}/{overlay_image_name}'
     
+    log_timing("get_layout_data", request_start, date=date_str, project=project)
     return jsonify(response_data)
 
 @app.route('/api/image/layout/<date_str>/<path:filename>')
 def get_layout_image(date_str, filename):
     """Serve layout JPG image - creates downscaled version if too large"""
+    request_start = time.perf_counter()
     # Find the date folder
     project = get_project_from_request()
     if project == "Sonrisa":
@@ -1101,6 +1127,7 @@ def get_layout_image(date_str, filename):
             
             # Check if downscaled version already exists
             if not os.path.exists(downscaled_path):
+                downscale_start = time.perf_counter()
                 Image.MAX_IMAGE_PIXELS = 2_000_000_000
                 with Image.open(file_path) as img:
                     # Calculate new size (max 4000px on longest side)
@@ -1115,6 +1142,7 @@ def get_layout_image(date_str, filename):
                         # Image is small enough, just copy it
                         import shutil
                         shutil.copy2(file_path, downscaled_path)
+                log_timing("layout_image_downscale", downscale_start, date=date_str, source=filename)
             
             # Serve the downscaled version
             file_path = downscaled_path
@@ -1124,8 +1152,10 @@ def get_layout_image(date_str, filename):
         response = send_file(file_path, mimetype='image/jpeg')
         response.headers['Cache-Control'] = 'public, max-age=3600'
         response.headers['Content-Length'] = str(file_size)
+        log_timing("get_layout_image", request_start, date=date_str, file=os.path.basename(file_path), bytes=file_size)
         return response
     except Exception as e:
+        log_timing("get_layout_image_failed", request_start, date=date_str, file=filename)
         print(f"Error serving image: {e}")
         import traceback
         traceback.print_exc()
@@ -1281,6 +1311,7 @@ def get_sonrisa_site_overview():
 
 @app.route('/api/sonrisa/image/<zone>/<date_str>')
 def get_sonrisa_image(zone, date_str):
+    request_start = time.perf_counter()
     project = get_project_from_request()
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
@@ -1316,11 +1347,13 @@ def get_sonrisa_image(zone, date_str):
     if web_path and os.path.exists(web_path):
         response = send_file(web_path, mimetype='image/jpeg')
         response.headers['Cache-Control'] = 'public, max-age=3600'
+        log_timing("get_sonrisa_image_cached", request_start, zone=zone, date=date_str, file=os.path.basename(web_path))
         return response
 
     tif_path = os.path.join(date_folder_path, zone_tif)
 
     try:
+        convert_start = time.perf_counter()
         Image.MAX_IMAGE_PIXELS = 2_000_000_000
         with rasterio.open(tif_path) as src:
             img_data = src.read()
@@ -1355,13 +1388,17 @@ def get_sonrisa_image(zone, date_str):
         buffer = BytesIO()
         img.save(buffer, format='JPEG', quality=85, optimize=True)
         buffer.seek(0)
+        log_timing("sonrisa_tif_to_jpeg", convert_start, zone=zone, date=date_str, tif=zone_tif, width=img.width, height=img.height)
+        log_timing("get_sonrisa_image", request_start, zone=zone, date=date_str, tif=zone_tif)
         return send_file(buffer, mimetype='image/jpeg')
     except Exception as e:
+        log_timing("get_sonrisa_image_failed", request_start, zone=zone, date=date_str, tif=zone_tif)
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/tracker/<date_str>/<tracker_id>')
 def get_tracker_image(date_str, tracker_id):
     """Get individual tracker TIFF as base64 for a specific date"""
+    request_start = time.perf_counter()
     # Find tracker TIFF - try multiple locations
     tracker_tif = f"{tracker_id}_boundary_spine.tif"
     
@@ -1410,6 +1447,7 @@ def get_tracker_image(date_str, tracker_id):
             if os.path.exists(path):
                 base64_img = tif_to_base64(path)
                 if base64_img:
+                    log_timing("get_tracker_image", request_start, date=date_str, tracker=tracker_id, path=path)
                     return jsonify({'image': f'data:image/png;base64,{base64_img}'})
         return jsonify({'error': f'Tracker image not found: {tracker_id}'}), 404
     
@@ -1441,6 +1479,7 @@ def get_tracker_image(date_str, tracker_id):
         if os.path.exists(path):
             base64_img = tif_to_base64(path)
             if base64_img:
+                log_timing("get_tracker_image", request_start, date=date_str, tracker=tracker_id, path=path)
                 return jsonify({'image': f'data:image/png;base64,{base64_img}'})
     
     # Return error with some debug info

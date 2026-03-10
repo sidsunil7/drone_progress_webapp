@@ -2275,6 +2275,30 @@
             }
             return `/api/tracker/${currentDate}/${trackerId}`;
         }
+
+        async function timedFetch(url, options = {}, label = 'fetch') {
+            const start = performance.now();
+            try {
+                const response = await fetch(url, options);
+                const elapsedMs = performance.now() - start;
+                const elapsedSec = (elapsedMs / 1000).toFixed(3);
+                const contentType = response.headers.get('content-type') || 'unknown';
+                const contentLength = response.headers.get('content-length') || 'unknown';
+                console.log(
+                    `[FetchTiming] ${label}: ${elapsedSec}s (${elapsedMs.toFixed(1)}ms)`,
+                    { url, status: response.status, ok: response.ok, contentType, contentLength }
+                );
+                return response;
+            } catch (error) {
+                const elapsedMs = performance.now() - start;
+                const elapsedSec = (elapsedMs / 1000).toFixed(3);
+                console.error(
+                    `[FetchTiming] ${label} failed after ${elapsedSec}s (${elapsedMs.toFixed(1)}ms)`,
+                    { url, error: error.message }
+                );
+                throw error;
+            }
+        }
         
         async function loadLayout(dateStr, preserveState = false) {
             try {
@@ -2296,7 +2320,8 @@
                 }
                 
                 // Load layout data
-                const response = await fetch(getLayoutUrl(dateStr));
+                const layoutUrl = getLayoutUrl(dateStr);
+                const response = await timedFetch(layoutUrl, {}, 'layout-data');
                 const data = await response.json();
                 
                 if (data.error) {
@@ -2339,7 +2364,7 @@
                 }
                 
                 try {
-                    const imageResponse = await fetch(layoutData.base_image);
+                    const imageResponse = await timedFetch(layoutData.base_image, {}, 'layout-image');
                     if (!imageResponse.ok) {
                         throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`);
                     }
@@ -3386,7 +3411,7 @@
                 const url = getTrackerUrl(trackerId);
                 console.log('displayTracker: Fetching', url);
                 
-                const response = await fetch(url);
+                const response = await timedFetch(url, {}, 'tracker-image');
                 const data = await response.json();
                 
                 console.log('displayTracker: Response', { hasError: !!data.error, hasImage: !!data.image });
