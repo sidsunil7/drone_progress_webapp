@@ -10,6 +10,7 @@ from io import BytesIO
 import base64
 import re
 import time
+import hashlib
 from functools import lru_cache
 
 app = Flask(__name__)
@@ -33,6 +34,10 @@ STAGE_COLORS = {
     "module_rails": (135, 206, 250, 200),  # Light blue
     "solar_panel": (0, 0, 139, 200),    # Dark blue
 }
+DEFAULT_MAX_AGE = 3600
+WEB_IMAGE_MAX_DIMENSION = int(os.environ.get("WEB_IMAGE_MAX_DIMENSION", "3000"))
+WEBP_QUALITY = int(os.environ.get("WEBP_QUALITY", "72"))
+JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
 
 
 def log_timing(label, start_time, **context):
@@ -43,10 +48,43 @@ def log_timing(label, start_time, **context):
     print(f"[Timing] {label}: {elapsed_ms:.1f}ms{context_suffix}")
 
 
+def build_etag(*parts):
+    hasher = hashlib.sha1()
+    for part in parts:
+        hasher.update(str(part).encode("utf-8"))
+        hasher.update(b"|")
+    return f"\"{hasher.hexdigest()}\""
+
+
+def request_etag_matches(etag):
+    if_none_match = request.headers.get("If-None-Match", "")
+    if not if_none_match:
+        return False
+    return etag in if_none_match or etag.strip('"') in if_none_match
+
+
+def apply_cache_headers(response, etag, max_age=DEFAULT_MAX_AGE):
+    response.headers["Cache-Control"] = f"public, max-age={max_age}"
+    response.headers["ETag"] = etag
+    return response
+
+
+def make_not_modified_response(etag, max_age=DEFAULT_MAX_AGE):
+    response = make_response("", 304)
+    apply_cache_headers(response, etag, max_age=max_age)
+    return response
+
+
 def get_file_signature(file_path):
     """Return a lightweight change signature for cache invalidation."""
     stat = os.stat(file_path)
     return stat.st_mtime_ns, stat.st_size
+
+
+def optional_file_signature(file_path):
+    if not file_path or not os.path.exists(file_path):
+        return (0, 0)
+    return get_file_signature(file_path)
 
 
 @lru_cache(maxsize=128)
@@ -63,6 +101,34 @@ def get_tracker_info_cached(csv_path, csv_sig):
 def get_tif_metadata_cached(tif_path, tif_sig):
     with rasterio.open(tif_path) as src:
         return list(src.transform), src.width, src.height, src.crs
+
+
+@lru_cache(maxsize=512)
+def get_image_dimensions_cached(image_path, image_sig):
+    with Image.open(image_path) as img:
+        return img.width, img.height
+
+
+@lru_cache(maxsize=128)
+def encode_image_file_cached(image_path, image_sig, target_format, quality, max_dimension):
+    Image.MAX_IMAGE_PIXELS = 2_000_000_000
+    with Image.open(image_path) as img:
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        if max_dimension and max(img.width, img.height) > max_dimension:
+            ratio = min(max_dimension / img.width, max_dimension / img.height)
+            new_size = (int(img.width * ratio), int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+
+        buffer = BytesIO()
+        fmt = (target_format or "jpeg").lower()
+        if fmt == "webp":
+            img.save(buffer, format="WEBP", quality=quality, method=4, optimize=True)
+            content_type = "image/webp"
+        else:
+            img.save(buffer, format="JPEG", quality=quality, optimize=True, progressive=True)
+            content_type = "image/jpeg"
+        return buffer.getvalue(), content_type, img.width, img.height
 
 
 @lru_cache(maxsize=512)
@@ -876,6 +942,119 @@ def tif_to_base64(tif_path, max_size=2000):
         return None
     return tif_to_base64_cached(tif_path, max_size, tif_sig)
 
+
+@lru_cache(maxsize=128)
+def build_sonrisa_layout_response_cached(
+    date_str,
+    zone,
+    project,
+    tif_path,
+    tif_sig,
+    json_path,
+    json_sig,
+    csv_path,
+    csv_sig,
+    web_path,
+    web_sig,
+):
+    transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
+    boundaries_raw = get_tracker_boundaries_cached(json_path, json_sig)
+    boundaries = {}
+    for tracker_id, boundary in boundaries_raw.items():
+        if normalize_zone_code(tracker_id) != zone:
+            continue
+        normalized_id = normalize_tracker_id(tracker_id)
+        if normalized_id:
+            boundaries[normalized_id] = reproject_boundary(boundary, "EPSG:4326", tif_crs)
+
+    tracker_info = {}
+    if csv_path and csv_sig != (0, 0):
+        tracker_info_raw = get_tracker_info_cached(csv_path, csv_sig)
+        for tracker_id, info in tracker_info_raw.items():
+            normalized_id = normalize_tracker_id(tracker_id)
+            if normalized_id:
+                tracker_info[normalized_id] = info
+
+    display_width = None
+    display_height = None
+    if web_path and web_sig != (0, 0):
+        display_width, display_height = get_image_dimensions_cached(web_path, web_sig)
+    if not display_width or not display_height:
+        display_width, display_height, _ = get_display_dimensions(width, height, max_size=2000)
+
+    return {
+        'boundaries': boundaries,
+        'tracker_info': tracker_info,
+        'transform': transform,
+        'tif_width': width,
+        'tif_height': height,
+        'base_image': f'/api/sonrisa/image/{zone}/{date_str}',
+        'original_image_width': width,
+        'original_image_height': height,
+        'display_image_width': display_width,
+        'display_image_height': display_height,
+        'image_scale_factor': (width / display_width) if display_width else 1.0,
+        'date': date_str
+    }
+
+
+@lru_cache(maxsize=128)
+def build_default_layout_response_cached(
+    date_str,
+    project,
+    tif_path,
+    tif_sig,
+    json_path,
+    json_sig,
+    csv_path,
+    csv_sig,
+    base_image_path,
+    base_image_sig,
+    display_image_path,
+    display_image_sig,
+    base_image_name,
+    overlay_image_name,
+):
+    transform, width, height, _ = get_tif_metadata_cached(tif_path, tif_sig)
+    boundaries = get_tracker_boundaries_cached(json_path, json_sig)
+    tracker_info = {}
+    if csv_path and csv_sig != (0, 0):
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+
+    original_width = None
+    original_height = None
+    display_width = None
+    display_height = None
+    scale_factor = 1.0
+
+    if base_image_path and base_image_sig != (0, 0):
+        original_width, original_height = get_image_dimensions_cached(base_image_path, base_image_sig)
+        if display_image_path and display_image_sig != (0, 0):
+            display_width, display_height = get_image_dimensions_cached(display_image_path, display_image_sig)
+            if display_width:
+                scale_factor = original_width / display_width
+        else:
+            display_width = original_width
+            display_height = original_height
+
+    response_data = {
+        'boundaries': boundaries,
+        'tracker_info': tracker_info,
+        'transform': transform,
+        'tif_width': width,
+        'tif_height': height,
+        'base_image': f'/api/image/layout/{date_str}/{base_image_name}',
+        'original_image_width': original_width,
+        'original_image_height': original_height,
+        'display_image_width': display_width,
+        'display_image_height': display_height,
+        'image_scale_factor': scale_factor,
+        'date': date_str
+    }
+    if overlay_image_name:
+        response_data['overlay_image'] = f'/api/image/layout/{date_str}/{overlay_image_name}'
+    return response_data
+
 @app.route('/')
 def select_project():
     """Project selection page"""
@@ -982,56 +1161,44 @@ def get_layout_data(date_str):
 
         tif_meta_start = time.perf_counter()
         tif_sig = get_file_signature(tif_path)
-        transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
+        _, _, _, _ = get_tif_metadata_cached(tif_path, tif_sig)
         log_timing("layout_tif_metadata", tif_meta_start, date=date_str, zone=zone, tif=zone_tif)
 
         json_sig = get_file_signature(json_path)
-        boundaries_raw = get_tracker_boundaries_cached(json_path, json_sig)
-        boundaries = {}
-        for tracker_id, b in boundaries_raw.items():
-            if normalize_zone_code(tracker_id) != zone:
-                continue
-            normalized_id = normalize_tracker_id(tracker_id)
-            if normalized_id:
-                reproj = reproject_boundary(b, "EPSG:4326", tif_crs)
-                boundaries[normalized_id] = reproj
-
-        tracker_info_raw = {}
-        if csv_path and os.path.exists(csv_path):
-            csv_sig = get_file_signature(csv_path)
-            tracker_info_raw = get_tracker_info_cached(csv_path, csv_sig)
-        tracker_info = {}
-        for tracker_id, info in tracker_info_raw.items():
-            normalized_id = normalize_tracker_id(tracker_id)
-            if normalized_id:
-                tracker_info[normalized_id] = info
+        csv_sig = optional_file_signature(csv_path)
 
         web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
-        display_width = None
-        display_height = None
-        if web_path and os.path.exists(web_path):
-            with Image.open(web_path) as img:
-                display_width = img.width
-                display_height = img.height
-        if not display_width or not display_height:
-            display_width, display_height, _ = get_display_dimensions(width, height, max_size=2000)
+        web_sig = optional_file_signature(web_path)
+        layout_etag = build_etag(
+            "layout",
+            project,
+            date_str,
+            zone,
+            tif_sig,
+            json_sig,
+            csv_sig,
+            web_sig,
+        )
+        if request_etag_matches(layout_etag):
+            return make_not_modified_response(layout_etag)
 
-        response_data = {
-            'boundaries': boundaries,
-            'tracker_info': tracker_info,
-            'transform': transform,
-            'tif_width': width,
-            'tif_height': height,
-            'base_image': f'/api/sonrisa/image/{zone}/{date_str}',
-            'original_image_width': width,
-            'original_image_height': height,
-            'display_image_width': display_width,
-            'display_image_height': display_height,
-            'image_scale_factor': (width / display_width) if display_width else 1.0,
-            'date': date_str
-        }
+        response_data = build_sonrisa_layout_response_cached(
+            date_str,
+            zone,
+            project,
+            tif_path,
+            tif_sig,
+            json_path,
+            json_sig,
+            csv_path or "",
+            csv_sig,
+            web_path or "",
+            web_sig,
+        )
+        response = jsonify(response_data)
+        apply_cache_headers(response, layout_etag)
         log_timing("get_layout_data", request_start, date=date_str, zone=zone, project=project)
-        return jsonify(response_data)
+        return response
     
     # Find the base image (without overlay)
     base_image_files = [f for f in os.listdir(date_folder_path) 
@@ -1066,11 +1233,7 @@ def get_layout_data(date_str):
         return jsonify({'error': 'JSON file not found'}), 404
     
     json_sig = get_file_signature(json_path)
-    boundaries = get_tracker_boundaries_cached(json_path, json_sig)
-    tracker_info = {}
-    if os.path.exists(csv_path):
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+    csv_sig = optional_file_signature(csv_path)
     
     # Get TIFF transform info
     # Try to find TIFF in the date folder first, then fall back to LEWISTIFS_DIR
@@ -1083,56 +1246,52 @@ def get_layout_data(date_str):
     
     tif_meta_start = time.perf_counter()
     tif_sig = get_file_signature(tif_path)
-    transform, width, height, _ = get_tif_metadata_cached(tif_path, tif_sig)
+    _, _, _, _ = get_tif_metadata_cached(tif_path, tif_sig)
     log_timing("layout_tif_metadata", tif_meta_start, date=date_str, project=project, tif=os.path.basename(tif_path))
     
     # Get base image dimensions
     base_image_path = os.path.join(date_folder_path, base_image_name)
-    original_width = None
-    original_height = None
-    display_width = None
-    display_height = None
-    scale_factor = 1.0
-    
-    if os.path.exists(base_image_path):
-        Image.MAX_IMAGE_PIXELS = 2_000_000_000
-        with Image.open(base_image_path) as img:
-            original_width = img.width
-            original_height = img.height
-            
-            # Check if downscaled version exists
-            downscaled_path = base_image_path.replace('.jpg', '_web.jpg')
-            if os.path.exists(downscaled_path):
-                with Image.open(downscaled_path) as downscaled_img:
-                    display_width = downscaled_img.width
-                    display_height = downscaled_img.height
-                    # Calculate scale factor from original to display
-                    scale_factor = original_width / display_width
-            else:
-                display_width = original_width
-                display_height = original_height
-    
-    response_data = {
-        'boundaries': boundaries,
-        'tracker_info': tracker_info,
-        'transform': transform,
-        'tif_width': width,
-        'tif_height': height,
-        'base_image': f'/api/image/layout/{date_str}/{base_image_name}',
-        'original_image_width': original_width,
-        'original_image_height': original_height,
-        'display_image_width': display_width,
-        'display_image_height': display_height,
-        'image_scale_factor': scale_factor,
-        'date': date_str
-    }
-    
-    # Add overlay image path if available (for reference)
-    if overlay_image_name:
-        response_data['overlay_image'] = f'/api/image/layout/{date_str}/{overlay_image_name}'
-    
+    downscaled_path = base_image_path.replace('.jpg', '_web.jpg')
+    display_image_path = downscaled_path if os.path.exists(downscaled_path) else base_image_path
+    base_image_sig = optional_file_signature(base_image_path)
+    display_image_sig = optional_file_signature(display_image_path)
+    overlay_path = os.path.join(date_folder_path, overlay_image_name) if overlay_image_name else ""
+    overlay_sig = optional_file_signature(overlay_path)
+
+    layout_etag = build_etag(
+        "layout",
+        project,
+        date_str,
+        tif_sig,
+        json_sig,
+        csv_sig,
+        base_image_sig,
+        display_image_sig,
+        overlay_sig,
+    )
+    if request_etag_matches(layout_etag):
+        return make_not_modified_response(layout_etag)
+
+    response_data = build_default_layout_response_cached(
+        date_str,
+        project,
+        tif_path,
+        tif_sig,
+        json_path,
+        json_sig,
+        csv_path if csv_sig != (0, 0) else "",
+        csv_sig,
+        base_image_path if base_image_sig != (0, 0) else "",
+        base_image_sig,
+        display_image_path if display_image_sig != (0, 0) else "",
+        display_image_sig,
+        base_image_name,
+        overlay_image_name or "",
+    )
+    response = jsonify(response_data)
+    apply_cache_headers(response, layout_etag)
     log_timing("get_layout_data", request_start, date=date_str, project=project)
-    return jsonify(response_data)
+    return response
 
 @app.route('/api/image/layout/<date_str>/<path:filename>')
 def get_layout_image(date_str, filename):
@@ -1189,11 +1348,39 @@ def get_layout_image(date_str, filename):
             file_path = downscaled_path
             file_size = os.path.getsize(file_path)
             print(f"Serving downscaled version: {file_size} bytes")
-        
-        response = send_file(file_path, mimetype='image/jpeg')
-        response.headers['Cache-Control'] = 'public, max-age=3600'
-        response.headers['Content-Length'] = str(file_size)
-        log_timing("get_layout_image", request_start, date=date_str, file=os.path.basename(file_path), bytes=file_size)
+
+        image_sig = get_file_signature(file_path)
+        requested_format = (request.args.get("format") or "").lower()
+        accepts_webp = "image/webp" in (request.headers.get("Accept") or "").lower()
+        target_format = "webp" if (requested_format == "webp" or (requested_format != "jpg" and accepts_webp)) else "jpeg"
+        quality = WEBP_QUALITY if target_format == "webp" else JPEG_QUALITY
+
+        etag = build_etag("layout-image", file_path, image_sig, target_format, quality, WEB_IMAGE_MAX_DIMENSION)
+        if request_etag_matches(etag):
+            return make_not_modified_response(etag)
+
+        image_bytes, content_type, out_w, out_h = encode_image_file_cached(
+            file_path,
+            image_sig,
+            target_format,
+            quality,
+            WEB_IMAGE_MAX_DIMENSION,
+        )
+
+        response = make_response(image_bytes)
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Length"] = str(len(image_bytes))
+        apply_cache_headers(response, etag)
+        log_timing(
+            "get_layout_image",
+            request_start,
+            date=date_str,
+            file=os.path.basename(file_path),
+            bytes=len(image_bytes),
+            width=out_w,
+            height=out_h,
+            fmt=target_format,
+        )
         return response
     except Exception as e:
         log_timing("get_layout_image_failed", request_start, date=date_str, file=filename)
@@ -1387,9 +1574,38 @@ def get_sonrisa_image(zone, date_str):
         return jsonify({'error': 'Zone TIFF not found'}), 404
     web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
     if web_path and os.path.exists(web_path):
-        response = send_file(web_path, mimetype='image/jpeg')
-        response.headers['Cache-Control'] = 'public, max-age=3600'
-        log_timing("get_sonrisa_image_cached", request_start, zone=zone, date=date_str, file=os.path.basename(web_path))
+        web_sig = get_file_signature(web_path)
+        requested_format = (request.args.get("format") or "").lower()
+        accepts_webp = "image/webp" in (request.headers.get("Accept") or "").lower()
+        target_format = "webp" if (requested_format == "webp" or (requested_format != "jpg" and accepts_webp)) else "jpeg"
+        quality = WEBP_QUALITY if target_format == "webp" else JPEG_QUALITY
+
+        etag = build_etag("sonrisa-image", web_path, web_sig, target_format, quality, WEB_IMAGE_MAX_DIMENSION)
+        if request_etag_matches(etag):
+            return make_not_modified_response(etag)
+
+        image_bytes, content_type, out_w, out_h = encode_image_file_cached(
+            web_path,
+            web_sig,
+            target_format,
+            quality,
+            WEB_IMAGE_MAX_DIMENSION,
+        )
+        response = make_response(image_bytes)
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Length"] = str(len(image_bytes))
+        apply_cache_headers(response, etag)
+        log_timing(
+            "get_sonrisa_image_cached",
+            request_start,
+            zone=zone,
+            date=date_str,
+            file=os.path.basename(web_path),
+            bytes=len(image_bytes),
+            width=out_w,
+            height=out_h,
+            fmt=target_format,
+        )
         return response
 
     tif_path = os.path.join(date_folder_path, zone_tif)

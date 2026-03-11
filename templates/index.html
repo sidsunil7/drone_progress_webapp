@@ -982,6 +982,8 @@
         let lastLoadedLayoutKey = null;
         const layoutResponseCache = new Map();
         const pendingLayoutRequests = new Map();
+        const layoutImageBlobCache = new Map();
+        const pendingLayoutImageRequests = new Map();
         const trackerImageCache = new Map();
 
         // Analytics data
@@ -1249,12 +1251,12 @@
                 document.getElementById('timelineStart').textContent = availableDates[0].display;
                 document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
                 document.getElementById('timelineCurrent').textContent = availableDates[0].display;
-                slider.addEventListener('input', (e) => {
+                slider.oninput = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
                     document.getElementById('timelineCurrent').textContent = selectedDate.display;
                     loadLayout(selectedDate.date, true);
-                });
+                };
                 renderTimelineDots();
             } else if (timelineContainer) {
                 timelineContainer.style.display = 'none';
@@ -2321,6 +2323,10 @@
         
         async function loadLayout(dateStr, preserveState = false) {
             try {
+                if (PROJECT === 'Sonrisa' && !selectedZone) {
+                    console.warn('Skipping layout load because no Sonrisa zone is selected', { dateStr, preserveState });
+                    return;
+                }
                 currentDate = dateStr;
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
                 if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) {
@@ -2409,17 +2415,38 @@
                 }
                 
                 try {
-                    const imageResponse = await timedFetch(layoutData.base_image, {}, 'layout-image');
-                    if (!imageResponse.ok) {
-                        throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`);
+                    const baseImageUrl = layoutData.base_image;
+                    let blob = layoutImageBlobCache.get(baseImageUrl);
+
+                    if (!blob) {
+                        let pendingImageFetch = pendingLayoutImageRequests.get(baseImageUrl);
+                        if (!pendingImageFetch) {
+                            pendingImageFetch = (async () => {
+                                const imageResponse = await timedFetch(baseImageUrl, {}, 'layout-image');
+                                if (!imageResponse.ok) {
+                                    throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`);
+                                }
+                                return imageResponse.blob();
+                            })();
+                            pendingLayoutImageRequests.set(baseImageUrl, pendingImageFetch);
+                        } else {
+                            console.log('[ClientCache] layout-image in-flight reuse', { baseImageUrl });
+                        }
+
+                        try {
+                            blob = await pendingImageFetch;
+                        } finally {
+                            pendingLayoutImageRequests.delete(baseImageUrl);
+                        }
+
+                        setLimitedCacheEntry(layoutImageBlobCache, baseImageUrl, blob, 20);
+                    } else {
+                        console.log('[ClientCache] layout-image hit', { baseImageUrl });
                     }
-                    
-                    // Check content type
-                    const contentType = imageResponse.headers.get('content-type');
-                    console.log('Image content-type:', contentType);
-                    
+
+                    console.log('Image content-type:', blob.type || 'unknown');
+
                     // Create blob and object URL
-                    const blob = await imageResponse.blob();
                     const imageUrl = URL.createObjectURL(blob);
                     
                     // Load image
