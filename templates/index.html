@@ -2379,9 +2379,16 @@
                     
                     // Load image
                     const img = new Image();
+                    const decodeStart = performance.now();
                     img.src = imageUrl;
                     
                     img.onload = () => {
+                        const decodeMs = performance.now() - decodeStart;
+                        console.log(
+                            `[RenderTiming] image-decode-onload: ${(decodeMs / 1000).toFixed(3)}s (${decodeMs.toFixed(1)}ms)`,
+                            { src: layoutData.base_image, width: img.width, height: img.height }
+                        );
+                        const renderStart = performance.now();
                         image = img; // Store reference
                         URL.revokeObjectURL(imageUrl); // Clean up
                         
@@ -2441,11 +2448,20 @@
                                 }
                             }, 100);
                         }
+                        const renderMs = performance.now() - renderStart;
+                        console.log(
+                            `[RenderTiming] canvas+overlay-render: ${(renderMs / 1000).toFixed(3)}s (${renderMs.toFixed(1)}ms)`,
+                            { preserveState }
+                        );
                     };
                     
                     img.onerror = (e) => {
+                        const decodeMs = performance.now() - decodeStart;
                         URL.revokeObjectURL(imageUrl); // Clean up
                         console.error('Image load error:', e);
+                        console.error(
+                            `[RenderTiming] image-decode-onload failed after ${(decodeMs / 1000).toFixed(3)}s (${decodeMs.toFixed(1)}ms)`
+                        );
                         console.error('Image src:', layoutData.base_image);
                         console.error('Blob size:', blob.size, 'bytes');
                         console.error('Blob type:', blob.type);
