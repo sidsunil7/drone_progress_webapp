@@ -1,65 +1,26 @@
-name: Dev testing deploy - droneprogressviewer
+name: Build and deploy Python app to Azure Web App - droneprogressviewer-dev
 
 on:
+  push:
+    branches:
+      - dev
   workflow_dispatch:
-    inputs:
-      testing_mode:
-        description: "Set ON only when actively testing"
-        required: true
-        type: choice
-        default: "OFF"
-        options:
-          - "OFF"
-          - "ON"
-      deploy_ref:
-        description: "Branch to deploy for testing"
-        required: true
-        type: string
-        default: "dev"
-
-concurrency:
-  group: dev-testing-droneprogressviewer
-  cancel-in-progress: true
 
 jobs:
-  gate:
-    runs-on: ubuntu-latest
-    outputs:
-      deploy_enabled: ${{ steps.gate.outputs.deploy_enabled }}
-    steps:
-      - id: gate
-        name: Validate branch and testing mode
-        run: |
-          if [ "${{ github.ref_name }}" != "main" ]; then
-            echo "Run this workflow from main (OIDC is configured on main)."
-            exit 1
-          fi
-
-          if [ "${{ github.event.inputs.testing_mode }}" = "ON" ]; then
-            echo "deploy_enabled=true" >> "$GITHUB_OUTPUT"
-            echo "Testing mode is ON. Deploy will proceed using ref '${{ github.event.inputs.deploy_ref }}'."
-          else
-            echo "deploy_enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Testing mode is OFF. Workflow will exit without deploy."
-          fi
-
   build:
     runs-on: ubuntu-latest
-    needs: gate
-    if: needs.gate.outputs.deploy_enabled == 'true'
     permissions:
       contents: read
+
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.deploy_ref }}
 
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      - name: Create virtualenv and install dependencies
+      - name: Create and Start virtual environment and Install dependencies
         run: |
           python -m venv antenv
           source antenv/bin/activate
@@ -68,7 +29,7 @@ jobs:
       - name: Upload artifact for deployment jobs
         uses: actions/upload-artifact@v4
         with:
-          name: python-app-dev-test
+          name: python-app
           path: |
             .
             !antenv/
@@ -76,18 +37,16 @@ jobs:
 
   deploy:
     runs-on: ubuntu-latest
-    needs:
-      - gate
-      - build
-    if: needs.gate.outputs.deploy_enabled == 'true'
+    needs: build
     permissions:
       id-token: write
       contents: read
+
     steps:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
-          name: python-app-dev-test
+          name: python-app
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -98,24 +57,13 @@ jobs:
 
       - name: Wait for app to be ready
         run: |
-          echo "Waiting 30 seconds before deployment..."
+          echo "Waiting 30 seconds to ensure app is stable before deployment..."
           sleep 30
 
-      - name: Deploy to Azure Web App (manual dev testing)
+      - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
+        id: deploy-to-webapp
         with:
-          app-name: "droneprogressviewer"
-          slot-name: "Production"
-          retry-timeout: 600
-
-  close-testing-note:
-    runs-on: ubuntu-latest
-    needs:
-      - gate
-      - deploy
-    if: always()
-    steps:
-      - name: Testing mode close reminder
-        run: |
-          echo "Dev testing run finished."
-          echo "Set testing_mode=OFF next run, or disable this workflow in Actions after testing."
+          app-name: 'droneprogressviewer'
+          slot-name: 'Production'
+          startup-command: 'LAYOUT_DIR=/home/site/wwwroot/layout_data gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'

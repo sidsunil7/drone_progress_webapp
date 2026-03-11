@@ -76,10 +76,9 @@ jobs:
       - name: 'Deploy to Azure Web App'
         uses: azure/webapps-deploy@v3
         id: deploy-to-webapp
-        continue-on-error: false
         with:
           app-name: 'droneprogressviewer'
           slot-name: 'Production'
-          retry-timeout: 600
+          startup-command: 'LAYOUT_DIR=/home/site/wwwroot/layout_data gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
 
 
