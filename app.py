@@ -430,24 +430,42 @@ def get_layout_dir(project):
     return os.path.join(BASE_LAYOUT_DIR, project)
 
 
-def get_sonrisa_json_path(project_layout_dir=None):
+def get_zone_json_path(project_layout_dir=None):
+    """Find the construction JSON with zone bounds for any project.
+    Falls back to Sonrisa-specific paths for backward compatibility."""
+    if project_layout_dir:
+        for fname in sorted(os.listdir(project_layout_dir)) if os.path.isdir(project_layout_dir) else []:
+            if fname.lower().endswith("_construction_ai.json") or fname.lower().endswith("_construction_ai_corrected_1.json"):
+                return os.path.join(project_layout_dir, fname)
     candidates = []
     if SONRISA_JSON_PATH:
         candidates.append(SONRISA_JSON_PATH)
     if project_layout_dir:
         candidates.append(os.path.join(project_layout_dir, "Sonrisa_construction_AI.json"))
-    # Fallback to layout_data/Sonrisa if project_layout_dir is not provided
     candidates.append(os.path.join(BASE_LAYOUT_DIR, "Sonrisa", "Sonrisa_construction_AI.json"))
     candidates.append(os.path.join(BASE_DIR, "Sonrisa_construction_AI.json"))
     for path in candidates:
         if path and os.path.exists(path):
             return path
-    # Fallback: search for any Sonrisa JSON in BASE_DIR
-    for root, _, files in os.walk(BASE_DIR):
-        for fname in files:
-            if fname.lower().startswith("sonrisa") and fname.lower().endswith(".json"):
-                return os.path.join(root, fname)
+    if project_layout_dir and os.path.isdir(project_layout_dir):
+        for fname in os.listdir(project_layout_dir):
+            if fname.lower().endswith(".json"):
+                return os.path.join(project_layout_dir, fname)
     return None
+
+
+get_sonrisa_json_path = get_zone_json_path
+
+
+def project_has_zones(project):
+    """Check whether a project uses zone-based layout (has zone bounds in its JSON)."""
+    project_layout_dir = get_layout_dir(project)
+    json_path = get_zone_json_path(project_layout_dir)
+    if not json_path:
+        return False
+    zone_bounds = get_sonrisa_zone_bounds(json_path)
+    available_zones = get_sonrisa_available_zones(project_layout_dir)
+    return bool(zone_bounds) and len(available_zones) > 0
 
 
 def get_sonrisa_zone_bounds(json_path):
@@ -988,7 +1006,7 @@ def build_sonrisa_layout_response_cached(
         'transform': transform,
         'tif_width': width,
         'tif_height': height,
-        'base_image': f'/api/sonrisa/image/{zone}/{date_str}',
+        'base_image': f'/api/zone/image/{zone}/{date_str}',
         'original_image_width': width,
         'original_image_height': height,
         'display_image_width': display_width,
@@ -1068,7 +1086,10 @@ def project_home(project):
     resolved_project = resolve_project_name(project)
     if not resolved_project:
         return render_template('select_project.html', projects=get_available_projects()), 404
-    response = make_response(render_template('index.html', project=resolved_project))
+    has_zones = project_has_zones(resolved_project)
+    response = make_response(render_template(
+        'index.html', project=resolved_project, has_zones=has_zones
+    ))
     response.set_cookie('project', resolved_project, samesite='Lax')
     return response
 
@@ -1080,10 +1101,10 @@ def get_dates():
     if not os.path.exists(project_layout_dir):
         return jsonify({'error': 'Layout directory not found'}), 404
 
-    if project == "Sonrisa":
+    if project_has_zones(project):
         zone = normalize_zone_code(request.args.get('zone'))
         if not zone:
-            return jsonify({'error': 'Zone required for Sonrisa'}), 400
+            return jsonify({'error': 'Zone required for this project'}), 400
         dates = get_sonrisa_zone_dates(project_layout_dir, zone)
         return jsonify({'dates': dates})
 
@@ -1112,10 +1133,11 @@ def get_layout_data(date_str):
     # Find the date folder
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
-    if project == "Sonrisa":
+    is_zone_project = project_has_zones(project)
+    if is_zone_project:
         zone = normalize_zone_code(request.args.get('zone'))
         if not zone:
-            return jsonify({'error': 'Zone required for Sonrisa'}), 400
+            return jsonify({'error': 'Zone required for this project'}), 400
         date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
         if not date_folder_path:
             return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
@@ -1124,12 +1146,11 @@ def get_layout_data(date_str):
         date_folder_path = os.path.join(project_layout_dir, date_folder)
     
     if not os.path.exists(date_folder_path):
-        if project == "Sonrisa":
-            return jsonify({'error': f'Date folder not found for Sonrisa {date_str}'}), 404
+        if is_zone_project:
+            return jsonify({'error': f'Date folder not found for {project} {date_str}'}), 404
         return jsonify({'error': f'Date folder not found: {date_folder}'}), 404
 
-    if project == "Sonrisa":
-        # Find zone TIFF
+    if is_zone_project:
         tif_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.tif')]
         zone_tif = None
         zone_aliases = get_zone_aliases(zone)
@@ -1153,7 +1174,7 @@ def get_layout_data(date_str):
         tif_path = os.path.join(date_folder_path, zone_tif)
 
         # Load JSON and CSV
-        json_path = get_sonrisa_json_path(project_layout_dir)
+        json_path = get_zone_json_path(project_layout_dir)
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
 
         if not json_path or not os.path.exists(json_path):
@@ -1299,8 +1320,8 @@ def get_layout_image(date_str, filename):
     request_start = time.perf_counter()
     # Find the date folder
     project = get_project_from_request()
-    if project == "Sonrisa":
-        return jsonify({'error': 'Use Sonrisa image endpoint'}), 400
+    if project_has_zones(project):
+        return jsonify({'error': 'Use /api/zone/image endpoint for zone-based projects'}), 400
     project_layout_dir = get_layout_dir(project)
     date_folder = f"{project}{date_str}"
     date_folder_path = os.path.join(project_layout_dir, date_folder)
@@ -1390,15 +1411,14 @@ def get_layout_image(date_str, filename):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/zones')
 @app.route('/api/sonrisa/zones')
-def get_sonrisa_zones():
+def get_zones():
     request_start = time.perf_counter()
     project = get_project_from_request()
-    if project != "Sonrisa":
-        return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
     date_id = request.args.get("date")
-    json_path = get_sonrisa_json_path(project_layout_dir)
+    json_path = get_zone_json_path(project_layout_dir)
     zone_bounds = get_sonrisa_zone_bounds(json_path)
     available_zones = get_sonrisa_available_zones(project_layout_dir)
     zone_stage = {
@@ -1409,7 +1429,7 @@ def get_sonrisa_zones():
         available_zones = [zone for zone in available_zones if zone_stage.get(zone)]
 
     if not zone_bounds:
-        return jsonify({'error': 'Sonrisa JSON boundaries not found'}), 404
+        return jsonify({'error': 'Zone boundaries not found'}), 404
 
     overall_bounds = compute_zone_overall_bounds(zone_bounds)
     if not overall_bounds:
@@ -1432,22 +1452,26 @@ def get_sonrisa_zones():
         ],
         'available_zones': available_zones,
         'overall_bounds': overall_bounds,
-        'block_map_url': '/api/sonrisa/block_map'
+        'block_map_url': '/api/block_map'
     })
-    log_timing("get_sonrisa_zones", request_start, date=date_id, zones=len(available_zones))
+    log_timing("get_zones", request_start, project=project, date=date_id, zones=len(available_zones))
     return response
 
 
+@app.route('/api/block_map')
 @app.route('/api/sonrisa/block_map')
-def get_sonrisa_block_map():
+def get_block_map():
     request_start = time.perf_counter()
     project = get_project_from_request()
-    if project != "Sonrisa":
-        return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
     date_id = request.args.get("date")
-    existing_map = os.path.join(project_layout_dir, "sonrisa_block_map.jpg")
-    json_path = get_sonrisa_json_path(project_layout_dir)
+    bg_candidates = [
+        os.path.join(project_layout_dir, f"{project.lower()}_block_map.jpg"),
+        os.path.join(project_layout_dir, "sonrisa_block_map.jpg"),
+        os.path.join(project_layout_dir, "block_map.jpg"),
+    ]
+    existing_map = next((p for p in bg_candidates if os.path.exists(p)), None)
+    json_path = get_zone_json_path(project_layout_dir)
     zone_bounds = get_sonrisa_zone_bounds(json_path)
     available_zones = get_sonrisa_available_zones(project_layout_dir)
     zone_colors = {}
@@ -1472,29 +1496,69 @@ def get_sonrisa_block_map():
     response = send_file(buffer, mimetype='image/png')
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     response.headers['Pragma'] = 'no-cache'
-    log_timing("get_sonrisa_block_map", request_start, date=date_id, zones=len(available_zones))
+    log_timing("get_block_map", request_start, project=project, date=date_id, zones=len(available_zones))
     return response
 
 
-@app.route('/api/sonrisa/dates')
-def get_sonrisa_dates():
+@app.route('/api/block_map_bg')
+def get_block_map_bg():
+    """Serve the static background block-map image (no zone overlays).
+    Works for any zone-based project. The frontend draws overlays on a canvas."""
     request_start = time.perf_counter()
     project = get_project_from_request()
-    if project != "Sonrisa":
-        return jsonify({'error': 'Invalid project'}), 400
+    project_layout_dir = get_layout_dir(project)
+    bg_candidates = [
+        os.path.join(project_layout_dir, f"{project.lower()}_block_map.jpg"),
+        os.path.join(project_layout_dir, "sonrisa_block_map.jpg"),
+        os.path.join(project_layout_dir, "block_map.jpg"),
+    ]
+    existing_map = next((p for p in bg_candidates if os.path.exists(p)), None)
+    if existing_map:
+        sig = get_file_signature(existing_map)
+        etag = build_etag("block_map_bg", project, sig)
+        if request_etag_matches(etag):
+            log_timing("get_block_map_bg", request_start, project=project, result="304")
+            return make_not_modified_response(etag)
+        fmt = "webp" if "image/webp" in request.headers.get("Accept", "") else "jpeg"
+        img_bytes = encode_image_file_cached(existing_map, sig, fmt, 85 if fmt == "webp" else 90, 1600)
+        response = make_response(img_bytes)
+        response.headers["Content-Type"] = f"image/{fmt}"
+        apply_cache_headers(response, etag, max_age=86400)
+    else:
+        json_path = get_zone_json_path(project_layout_dir)
+        zone_bounds = get_sonrisa_zone_bounds(json_path)
+        if not zone_bounds:
+            return jsonify({'error': 'No zone data for this project'}), 404
+        overall = compute_zone_overall_bounds(zone_bounds)
+        if not overall:
+            return jsonify({'error': 'Unable to compute bounds'}), 500
+        img = Image.new("RGBA", (1600, 900), (245, 245, 245, 255))
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        buffer.seek(0)
+        response = send_file(buffer, mimetype='image/png')
+        response.headers['Cache-Control'] = f'public, max-age={DEFAULT_MAX_AGE}'
+    log_timing("get_block_map_bg", request_start, project=project)
+    return response
+
+
+@app.route('/api/zone_dates')
+@app.route('/api/sonrisa/dates')
+def get_zone_dates():
+    request_start = time.perf_counter()
+    project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
     dates = get_sonrisa_all_dates(project_layout_dir)
     response = jsonify({'dates': dates})
-    log_timing("get_sonrisa_dates", request_start, count=len(dates))
+    log_timing("get_zone_dates", request_start, project=project, count=len(dates))
     return response
 
 
+@app.route('/api/site_overview')
 @app.route('/api/sonrisa/site_overview')
-def get_sonrisa_site_overview():
+def get_site_overview():
     """Return site-level zone summary (total, completed, %) for a date. CSV-only, no TIFFs."""
     project = get_project_from_request()
-    if project != "Sonrisa":
-        return jsonify({'error': 'Invalid project'}), 400
     date_id = request.args.get("date")
     if not date_id:
         return jsonify({'error': 'Date required'}), 400
@@ -1536,8 +1600,10 @@ def get_sonrisa_site_overview():
         rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
 
     completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
+    json_path = get_zone_json_path(project_layout_dir)
+    all_zone_bounds = get_sonrisa_zone_bounds(json_path) if json_path else {}
     return jsonify({
-        "total_zones": 54,
+        "total_zones": len(all_zone_bounds) if all_zone_bounds else len(rows),
         "available_count": len(rows),
         "completed_zones_count": completed_zones,
         "zones": rows,
@@ -1546,12 +1612,11 @@ def get_sonrisa_site_overview():
     })
 
 
+@app.route('/api/zone/image/<zone>/<date_str>')
 @app.route('/api/sonrisa/image/<zone>/<date_str>')
-def get_sonrisa_image(zone, date_str):
+def get_zone_image(zone, date_str):
     request_start = time.perf_counter()
     project = get_project_from_request()
-    if project != "Sonrisa":
-        return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
     zone = normalize_zone_code(zone)
     if not zone:
@@ -1671,10 +1736,11 @@ def get_tracker_image(date_str, tracker_id):
     # Find the date folder to get the date_match
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
-    if project == "Sonrisa":
+    is_zone_project = project_has_zones(project)
+    if is_zone_project:
         zone = normalize_zone_code(request.args.get('zone'))
         if not zone:
-            return jsonify({'error': 'Zone required for Sonrisa'}), 400
+            return jsonify({'error': 'Zone required for this project'}), 400
         date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
         if not date_folder_path:
             return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
@@ -1685,7 +1751,7 @@ def get_tracker_image(date_str, tracker_id):
     if not os.path.exists(date_folder_path):
         return jsonify({'error': f'Date folder not found'}), 404
 
-    if project == "Sonrisa":
+    if is_zone_project:
         if tracker_id.lower().endswith('.tif'):
             tracker_filename = tracker_id
         elif tracker_id.lower().endswith('_boundary_spine'):
@@ -1766,12 +1832,12 @@ def handle_click():
         if not date_str:
             return jsonify({'error': 'Date required'}), 400
         
-        # Find the date folder to get the date_match
         project_layout_dir = get_layout_dir(project)
-        if project == "Sonrisa":
+        is_zone_project = project_has_zones(project)
+        if is_zone_project:
             zone = normalize_zone_code(request.args.get('zone'))
             if not zone:
-                return jsonify({'error': 'Zone required for Sonrisa'}), 400
+                return jsonify({'error': 'Zone required for this project'}), 400
             date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
         else:
             date_folder = f"{project}{date_str}"
@@ -1780,13 +1846,11 @@ def handle_click():
         if not os.path.exists(date_folder_path):
             return jsonify({'error': 'Date folder not found'}), 404
         
-        # Find any image file to get date_match
-        # Try multiple patterns to find the date_match prefix
         base_image_files = [f for f in os.listdir(date_folder_path) 
                            if f.endswith('.jpg') and 
                            not f.endswith('_web.jpg')]
         
-        if project != "Sonrisa" and not base_image_files:
+        if not is_zone_project and not base_image_files:
             return jsonify({'error': f'No image files found for date {date_str}'}), 404
         
         # Extract date_match from the first image file found
@@ -1796,8 +1860,7 @@ def handle_click():
             first_image = base_image_files[0]
             date_match = first_image.replace('_stage_overlay.jpg', '').replace('_status_overlay.jpg', '').replace('_stage_status_overlay.jpg', '').replace('.jpg', '')
         
-        # Try to find TIFF in the date folder first, then fall back to LEWISTIFS_DIR
-        if project == "Sonrisa":
+        if is_zone_project:
             tif_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.tif')]
             zone_tif = None
             zone_aliases = get_zone_aliases(zone)
@@ -1833,9 +1896,8 @@ def handle_click():
             lon, lat = src.xy(y, x)
             tif_crs = src.crs
         
-        # Load boundaries
-        if project == "Sonrisa":
-            json_path = get_sonrisa_json_path(project_layout_dir)
+        if is_zone_project:
+            json_path = get_zone_json_path(project_layout_dir)
         else:
             json_path = find_project_json(project_layout_dir, project)
         if not json_path or not os.path.exists(json_path):
@@ -1843,7 +1905,7 @@ def handle_click():
         
         json_sig = get_file_signature(json_path)
         boundaries = get_tracker_boundaries_cached(json_path, json_sig)
-        if project == "Sonrisa":
+        if is_zone_project:
             normalized_boundaries = {}
             for tracker_id, b in boundaries.items():
                 if normalize_zone_code(tracker_id) != zone:

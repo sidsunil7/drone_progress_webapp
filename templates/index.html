@@ -757,12 +757,12 @@
 
             <!-- Map View -->
             <div id="mapView" class="view-panel active">
-                <div class="zone-picker" id="sonrisaZonePicker" style="display: none;">
-                    <h2>Select a Sonrisa Zone</h2>
+                <div class="zone-picker" id="zonePicker" style="display: none;">
+                    <h2>Select a Zone</h2>
                     <p>Available zones are highlighted in green. Click a zone to continue.</p>
                     <div class="zone-picker-content">
                         <div class="zone-map">
-                            <img id="sonrisaBlockMap" alt="Sonrisa zone map">
+                            <canvas id="blockMapCanvas" style="cursor:pointer; max-width:100%;"></canvas>
                         </div>
                     </div>
                 </div>
@@ -935,6 +935,7 @@
     
     <script>
         const PROJECT = "{{ project|default('Lewis') }}";
+        const HAS_ZONES = {{ has_zones|default(false)|tojson }};
         let currentDate = null;
         let availableDates = [];
         let zoneMapDates = [];
@@ -976,7 +977,7 @@
         let siteStageStatusCounts = {};
         let siteTotalTrackers = 0;
 
-        // Sonrisa zone selection state
+        // Zone selection state (for zone-based projects)
         let selectedZone = null;
         let zoneMeta = null;
         let lastLoadedLayoutKey = null;
@@ -989,6 +990,113 @@
         const siteOverviewCache = new Map();
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
+        let blockMapBgImage = null;
+        let blockMapBgLoaded = false;
+
+        const STAGE_COLORS_CSS = {
+            pile:         'rgba(200, 150, 255, 0.78)',
+            torque_tube:  'rgba(128, 0, 128, 0.78)',
+            module_rails: 'rgba(135, 206, 250, 0.78)',
+            solar_panel:  'rgba(0, 0, 139, 0.78)',
+        };
+        const ZONE_DEFAULT_FILL     = 'rgba(120, 220, 120, 0.78)';
+        const ZONE_UNAVAILABLE_FILL = 'rgba(255, 255, 255, 1.0)';
+
+        function drawBlockMapCanvas(zoneData) {
+            const mapStart = performance.now();
+            const canvas = document.getElementById('blockMapCanvas');
+            if (!canvas || !zoneData || !zoneData.overall_bounds) return;
+            const ctx = canvas.getContext('2d');
+            const ob = zoneData.overall_bounds;
+            const availSet = new Set(zoneData.available_zones || []);
+
+            if (blockMapBgLoaded && blockMapBgImage) {
+                canvas.width = blockMapBgImage.naturalWidth;
+                canvas.height = blockMapBgImage.naturalHeight;
+                ctx.drawImage(blockMapBgImage, 0, 0);
+            } else {
+                canvas.width = 1600;
+                canvas.height = 900;
+                ctx.fillStyle = '#f5f5f5';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+            const w = canvas.width;
+            const h = canvas.height;
+            const lonRange = ob.max_lon - ob.min_lon;
+            const latRange = ob.max_lat - ob.min_lat;
+            if (lonRange === 0 || latRange === 0) return;
+
+            ctx.font = '11px sans-serif';
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'center';
+
+            for (const z of (zoneData.zones || [])) {
+                const b = z.bounds;
+                if (!b) continue;
+                const x1 = ((b.min_lon - ob.min_lon) / lonRange) * w;
+                const x2 = ((b.max_lon - ob.min_lon) / lonRange) * w;
+                const y1 = ((ob.max_lat - b.max_lat) / latRange) * h;
+                const y2 = ((ob.max_lat - b.min_lat) / latRange) * h;
+
+                if (z.stage && STAGE_COLORS_CSS[z.stage]) {
+                    ctx.fillStyle = STAGE_COLORS_CSS[z.stage];
+                } else if (z.available) {
+                    ctx.fillStyle = ZONE_DEFAULT_FILL;
+                } else {
+                    ctx.fillStyle = ZONE_UNAVAILABLE_FILL;
+                }
+                ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+
+                const cx = (x1 + x2) / 2;
+                const cy = (y1 + y2) / 2;
+                const label = z.zone;
+                const tm = ctx.measureText(label);
+                const pad = 4;
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.86)';
+                ctx.fillRect(cx - tm.width / 2 - pad, cy - 7, tm.width + pad * 2, 14);
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(cx - tm.width / 2 - pad, cy - 7, tm.width + pad * 2, 14);
+                ctx.fillStyle = '#000';
+                ctx.fillText(label, cx, cy);
+            }
+            const elapsed = performance.now() - mapStart;
+            console.log(`[MapTiming] drawBlockMapCanvas: ${(elapsed / 1000).toFixed(3)}s (${elapsed.toFixed(1)}ms)`,
+                { zones: (zoneData.zones || []).length, bgLoaded: blockMapBgLoaded, canvasSize: `${w}x${h}` });
+        }
+
+        function loadBlockMapBackground() {
+            const bgStart = performance.now();
+            return new Promise((resolve) => {
+                if (blockMapBgLoaded && blockMapBgImage) {
+                    resolve(blockMapBgImage);
+                    return;
+                }
+                const img = new Image();
+                img.crossOrigin = 'anonymous';
+                img.onload = () => {
+                    blockMapBgImage = img;
+                    blockMapBgLoaded = true;
+                    const elapsed = performance.now() - bgStart;
+                    console.log(`[MapTiming] block-map-bg-load: ${(elapsed / 1000).toFixed(3)}s (${elapsed.toFixed(1)}ms)`,
+                        { width: img.naturalWidth, height: img.naturalHeight });
+                    resolve(img);
+                };
+                img.onerror = () => {
+                    const elapsed = performance.now() - bgStart;
+                    console.warn(`[MapTiming] block-map-bg-load failed after ${(elapsed / 1000).toFixed(3)}s`);
+                    blockMapBgLoaded = false;
+                    resolve(null);
+                };
+                img.src = '/api/block_map_bg';
+            });
+        }
+        let layoutLoadTimer = null;
+        let latestLayoutLoadRequest = null;
 
         // Analytics data
         let allDateSummaries = {}; // {dateStr: {stageStatusCounts, totalTrackers}}
@@ -1019,16 +1127,16 @@
         
         // Initialize
         async function init() {
+            const pageInitStart = performance.now();
             try {
                 setupViewTabs();
 
-                if (PROJECT === 'Sonrisa') {
-                    await initSonrisa();
+                if (HAS_ZONES) {
+                    await initZoneProject();
                     return;
                 }
 
-                // Get available dates
-                const response = await fetch('/api/dates');
+                const response = await timedFetch('/api/dates', {}, 'dates');
                 const data = await response.json();
                 
                 if (data.error) {
@@ -1080,7 +1188,13 @@
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
                         document.getElementById('timelineCurrent').textContent = selectedDate.display;
-                        loadLayout(selectedDate.date, true); // Preserve state when switching dates
+                        scheduleLayoutLoad(selectedDate.date, true); // Preserve state when switching dates
+                    });
+                    slider.addEventListener('change', (e) => {
+                        const index = parseInt(e.target.value);
+                        const selectedDate = availableDates[index];
+                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        loadLayout(selectedDate.date, true);
                     });
 
                     // Render dots to indicate available dates
@@ -1089,17 +1203,20 @@
                     timelineContainer.style.display = 'none';
                 }
                 
-                // Load first date
                 currentDate = availableDates[0].date;
                 await loadLayout(currentDate);
+                const pageElapsed = performance.now() - pageInitStart;
+                console.log(`[MapTiming] init: ${(pageElapsed / 1000).toFixed(3)}s (${pageElapsed.toFixed(1)}ms)`,
+                    { project: PROJECT, dates: availableDates.length });
             } catch (error) {
                 showError(`Error initializing: ${error.message}`);
             }
         }
 
-        async function initSonrisa() {
+        async function initZoneProject() {
+            const initStart = performance.now();
             try {
-                const zonePicker = document.getElementById('sonrisaZonePicker');
+                const zonePicker = document.getElementById('zonePicker');
                 const layoutWrapper = document.getElementById('layoutWrapper');
                 const timelineContainer = document.getElementById('timelineContainer');
                 const backBtn = document.getElementById('backToZonesBtn');
@@ -1123,7 +1240,7 @@
                     backProjectsBtn.addEventListener('click', returnToProjectSelection);
                 }
 
-                const resp = await timedFetch('/api/sonrisa/zones', {}, 'sonrisa-zones');
+                const resp = await timedFetch('/api/zones', {}, 'zones');
                 const data = await resp.json();
                 if (data.error) {
                     showError(data.error);
@@ -1131,10 +1248,11 @@
                 }
 
                 zoneMeta = data;
-                const blockMapImg = document.getElementById('sonrisaBlockMap');
-                if (blockMapImg && data.block_map_url) {
-                    blockMapImg.src = data.block_map_url;
-                    blockMapImg.addEventListener('click', (event) => {
+                const mapCanvas = document.getElementById('blockMapCanvas');
+                if (mapCanvas) {
+                    await loadBlockMapBackground();
+                    drawBlockMapCanvas(data);
+                    mapCanvas.addEventListener('click', (event) => {
                         const zone = getZoneFromClick(event);
                         if (zone) {
                             selectZone(zone);
@@ -1142,7 +1260,7 @@
                     });
                 }
 
-                const dateResp = await timedFetch('/api/sonrisa/dates', {}, 'sonrisa-dates');
+                const dateResp = await timedFetch('/api/zone_dates', {}, 'zone-dates');
                 const dateData = await dateResp.json();
                 if (!dateData.error && Array.isArray(dateData.dates) && dateData.dates.length > 0) {
                     zoneMapDates = dateData.dates;
@@ -1175,14 +1293,16 @@
                     timelineContainer.style.display = 'none';
                 }
 
-                // Zone selection happens by clicking the block map.
+                const initElapsed = performance.now() - initStart;
+                console.log(`[MapTiming] initZoneProject: ${(initElapsed / 1000).toFixed(3)}s (${initElapsed.toFixed(1)}ms)`,
+                    { zones: (zoneMeta?.zones || []).length, dates: zoneMapDates.length });
             } catch (error) {
-                showError(`Error loading Sonrisa zones: ${error.message}`);
+                showError(`Error loading zones: ${error.message}`);
             }
         }
 
         function renderZoneList(zones) {
-            const list = document.getElementById('sonrisaZoneList');
+            const list = document.getElementById('zoneList');
             if (!list) return;
             list.innerHTML = '';
             zones.forEach(z => {
@@ -1219,7 +1339,7 @@
 
         async function selectZone(zone) {
             selectedZone = zone;
-            const zonePicker = document.getElementById('sonrisaZonePicker');
+            const zonePicker = document.getElementById('zonePicker');
             const layoutWrapper = document.getElementById('layoutWrapper');
             const siteOverviewSection = document.getElementById('siteOverviewSection');
             const filterSection = document.getElementById('filterSection');
@@ -1231,7 +1351,7 @@
             renderStageFilters();
             renderStatusFilters();
 
-            const response = await fetch(`/api/dates?zone=${encodeURIComponent(zone)}`);
+            const response = await timedFetch(`/api/dates?zone=${encodeURIComponent(zone)}`, {}, 'zone-dates');
             const data = await response.json();
             if (data.error) {
                 showError(data.error);
@@ -1265,6 +1385,12 @@
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
                     document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                    scheduleLayoutLoad(selectedDate.date, true);
+                };
+                slider.onchange = (e) => {
+                    const index = parseInt(e.target.value);
+                    const selectedDate = availableDates[index];
+                    document.getElementById('timelineCurrent').textContent = selectedDate.display;
                     loadLayout(selectedDate.date, true);
                 };
                 renderTimelineDots();
@@ -1284,7 +1410,7 @@
             selectedTrackerId = null;
             resetTrackerPreview();
 
-            const zonePicker = document.getElementById('sonrisaZonePicker');
+            const zonePicker = document.getElementById('zonePicker');
             const layoutWrapper = document.getElementById('layoutWrapper');
             const timelineContainer = document.getElementById('timelineContainer');
             if (zonePicker) zonePicker.style.display = 'block';
@@ -1334,47 +1460,45 @@
         }
 
         async function updateZoneMapForDate(dateId) {
+            const updateStart = performance.now();
             if (!dateId) return;
             latestZoneMapDateRequest = dateId;
-            const blockMapImg = document.getElementById('sonrisaBlockMap');
             const cacheKey = `${dateId}`;
             let data = zoneMapDataCache.get(cacheKey);
             if (!data) {
-                const url = `/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`;
-                const resp = await timedFetch(url, {}, 'sonrisa-zones-by-date');
+                const url = `/api/zones?date=${encodeURIComponent(dateId)}`;
+                const resp = await timedFetch(url, {}, 'zones-by-date');
                 data = await resp.json();
                 if (!data.error) {
                     setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
                 }
             } else {
-                console.log('[ClientCache] sonrisa-zones-by-date hit', { dateId });
+                console.log('[ClientCache] zones-by-date hit', { dateId });
             }
             if (latestZoneMapDateRequest !== dateId) {
                 return;
             }
             if (!data.error) zoneMeta = data;
-            if (blockMapImg) {
-                const nextSrc = getZoneMapImageUrl(dateId);
-                if (blockMapImg.dataset.currentSrc !== nextSrc) {
-                    blockMapImg.src = nextSrc;
-                    blockMapImg.dataset.currentSrc = nextSrc;
-                }
-            }
+            drawBlockMapCanvas(data);
+            const elapsed = performance.now() - updateStart;
+            console.log(`[MapTiming] updateZoneMapForDate: ${(elapsed / 1000).toFixed(3)}s (${elapsed.toFixed(1)}ms)`,
+                { dateId, cached: zoneMapDataCache.has(cacheKey) });
             await renderSiteOverviewTable(dateId);
         }
 
         async function renderSiteOverviewTable(dateId) {
+            const tableStart = performance.now();
             const container = document.getElementById('siteOverviewTable');
-            if (!container || PROJECT !== 'Sonrisa') return;
+            if (!container || !HAS_ZONES) return;
             let data = siteOverviewCache.get(dateId);
             if (!data) {
-                const resp = await timedFetch(`/api/sonrisa/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'sonrisa-site-overview');
+                const resp = await timedFetch(`/api/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'site-overview');
                 data = await resp.json();
                 if (!data.error) {
                     setLimitedCacheEntry(siteOverviewCache, dateId, data, 120);
                 }
             } else {
-                console.log('[ClientCache] sonrisa-site-overview hit', { dateId });
+                console.log('[ClientCache] site-overview hit', { dateId });
             }
             if (data.error || !data.zones) {
                 container.innerHTML = '<div class="filter-summary-text">' + (data.error || 'No zone data for this date.') + '</div>';
@@ -1415,7 +1539,6 @@
             ).join('');
             container.innerHTML = summaryHtml + header + body + '</tbody></table>';
 
-            // Store site-level stage counts for zone picker filter
             if (data.stage_counts && data.stage_status_counts) {
                 siteStageCounts = data.stage_counts;
                 siteStageStatusCounts = data.stage_status_counts;
@@ -1426,6 +1549,9 @@
                     updateFilterSummary();
                 }
             }
+            const tableElapsed = performance.now() - tableStart;
+            console.log(`[MapTiming] renderSiteOverviewTable: ${(tableElapsed / 1000).toFixed(3)}s (${tableElapsed.toFixed(1)}ms)`,
+                { dateId, cached: siteOverviewCache.has(dateId), rows: (data.zones || []).length });
         }
 
         function returnToProjectSelection() {
@@ -1520,7 +1646,7 @@
         async function computeAllDateSummaries() {
             allDateSummaries = {};
             for (const d of availableDates) {
-                const resp = await fetch(getLayoutUrl(d.date));
+                const resp = await timedFetch(getLayoutUrl(d.date), {}, `date-summary-${d.date}`);
                 const ld = await resp.json();
                 if (!ld || ld.error) continue;
 
@@ -2301,21 +2427,21 @@
         }
 
         function getLayoutUrl(dateStr) {
-            if (PROJECT === 'Sonrisa' && selectedZone) {
+            if (HAS_ZONES && selectedZone) {
                 return `/api/layout/${dateStr}?zone=${encodeURIComponent(selectedZone)}`;
             }
             return `/api/layout/${dateStr}`;
         }
 
         function getClickUrl(tifX, tifY) {
-            if (PROJECT === 'Sonrisa' && selectedZone) {
+            if (HAS_ZONES && selectedZone) {
                 return `/api/click?x=${tifX}&y=${tifY}&date=${currentDate}&zone=${encodeURIComponent(selectedZone)}`;
             }
             return `/api/click?x=${tifX}&y=${tifY}&date=${currentDate}`;
         }
 
         function getTrackerUrl(trackerId) {
-            if (PROJECT === 'Sonrisa' && selectedZone) {
+            if (HAS_ZONES && selectedZone) {
                 return `/api/tracker/${currentDate}/${trackerId}?zone=${encodeURIComponent(selectedZone)}`;
             }
             return `/api/tracker/${currentDate}/${trackerId}`;
@@ -2360,11 +2486,6 @@
             }
         }
 
-        function getZoneMapImageUrl(dateId) {
-            if (!dateId) return '/api/sonrisa/block_map';
-            return `/api/sonrisa/block_map?date=${encodeURIComponent(dateId)}`;
-        }
-
         function scheduleZoneMapUpdate(dateId, delayMs = 180) {
             if (!dateId) return;
             if (zoneMapUpdateTimer) {
@@ -2374,11 +2495,25 @@
                 updateZoneMapForDate(dateId);
             }, delayMs);
         }
+
+        function scheduleLayoutLoad(dateStr, preserveState = true, delayMs = 140) {
+            if (!dateStr) return;
+            latestLayoutLoadRequest = `${selectedZone || 'none'}|${dateStr}|${preserveState ? '1' : '0'}`;
+            if (layoutLoadTimer) {
+                clearTimeout(layoutLoadTimer);
+            }
+            layoutLoadTimer = setTimeout(() => {
+                const expectedKey = `${selectedZone || 'none'}|${dateStr}|${preserveState ? '1' : '0'}`;
+                if (latestLayoutLoadRequest !== expectedKey) return;
+                loadLayout(dateStr, preserveState);
+            }, delayMs);
+        }
         
         async function loadLayout(dateStr, preserveState = false) {
+            const layoutStart = performance.now();
             try {
-                if (PROJECT === 'Sonrisa' && !selectedZone) {
-                    console.warn('Skipping layout load because no Sonrisa zone is selected', { dateStr, preserveState });
+                if (HAS_ZONES && !selectedZone) {
+                    console.warn('Skipping layout load because no zone is selected', { dateStr, preserveState, project: PROJECT });
                     return;
                 }
                 currentDate = dateStr;
@@ -2578,6 +2713,11 @@
                         console.log(
                             `[RenderTiming] canvas+overlay-render: ${(renderMs / 1000).toFixed(3)}s (${renderMs.toFixed(1)}ms)`,
                             { preserveState }
+                        );
+                        const totalLayoutMs = performance.now() - layoutStart;
+                        console.log(
+                            `[MapTiming] loadLayout: ${(totalLayoutMs / 1000).toFixed(3)}s (${totalLayoutMs.toFixed(1)}ms)`,
+                            { dateStr, preserveState, project: PROJECT, zone: selectedZone || 'none' }
                         );
                         lastLoadedLayoutKey = requestedLayoutKey;
                     };
@@ -3164,7 +3304,7 @@
             
             try {
                 // Send to server for coordinate conversion
-                const response = await fetch(getClickUrl(tifX, tifY));
+                const response = await timedFetch(getClickUrl(tifX, tifY), {}, 'click-lookup');
                 const result = await response.json();
                 
                 if (result.error) {
