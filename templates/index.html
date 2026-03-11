@@ -979,6 +979,10 @@
         // Sonrisa zone selection state
         let selectedZone = null;
         let zoneMeta = null;
+        let lastLoadedLayoutKey = null;
+        const layoutResponseCache = new Map();
+        const pendingLayoutRequests = new Map();
+        const trackerImageCache = new Map();
 
         // Analytics data
         let allDateSummaries = {}; // {dateStr: {stageStatusCounts, totalTrackers}}
@@ -2299,10 +2303,30 @@
                 throw error;
             }
         }
+
+        function getLayoutCacheKey(dateStr) {
+            return `${PROJECT}|${selectedZone || 'none'}|${dateStr}`;
+        }
+
+        function setLimitedCacheEntry(map, key, value, maxEntries = 200) {
+            if (map.has(key)) {
+                map.delete(key);
+            }
+            map.set(key, value);
+            if (map.size > maxEntries) {
+                const oldestKey = map.keys().next().value;
+                map.delete(oldestKey);
+            }
+        }
         
         async function loadLayout(dateStr, preserveState = false) {
             try {
                 currentDate = dateStr;
+                const requestedLayoutKey = getLayoutCacheKey(dateStr);
+                if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) {
+                    console.log('[ClientCache] Skipping duplicate layout reload', { requestedLayoutKey });
+                    return;
+                }
                 
                 // Update timeline slider position if it exists
                 if (availableDates.length > 1) {
@@ -2321,8 +2345,29 @@
                 
                 // Load layout data
                 const layoutUrl = getLayoutUrl(dateStr);
-                const response = await timedFetch(layoutUrl, {}, 'layout-data');
-                const data = await response.json();
+                let data = layoutResponseCache.get(requestedLayoutKey);
+                if (data) {
+                    console.log('[ClientCache] layout-data hit', { requestedLayoutKey });
+                } else {
+                    let pending = pendingLayoutRequests.get(requestedLayoutKey);
+                    if (!pending) {
+                        pending = (async () => {
+                            const response = await timedFetch(layoutUrl, {}, 'layout-data');
+                            return response.json();
+                        })();
+                        pendingLayoutRequests.set(requestedLayoutKey, pending);
+                    } else {
+                        console.log('[ClientCache] layout-data in-flight reuse', { requestedLayoutKey });
+                    }
+                    try {
+                        data = await pending;
+                    } finally {
+                        pendingLayoutRequests.delete(requestedLayoutKey);
+                    }
+                    if (!data.error) {
+                        setLimitedCacheEntry(layoutResponseCache, requestedLayoutKey, data, 60);
+                    }
+                }
                 
                 if (data.error) {
                     showError(data.error);
@@ -2453,6 +2498,7 @@
                             `[RenderTiming] canvas+overlay-render: ${(renderMs / 1000).toFixed(3)}s (${renderMs.toFixed(1)}ms)`,
                             { preserveState }
                         );
+                        lastLoadedLayoutKey = requestedLayoutKey;
                     };
                     
                     img.onerror = (e) => {
@@ -3425,6 +3471,13 @@
             // Load tracker image
             try {
                 const url = getTrackerUrl(trackerId);
+                const trackerCacheKey = `${PROJECT}|${selectedZone || 'none'}|${currentDate}|${trackerId}`;
+                const cachedImage = trackerImageCache.get(trackerCacheKey);
+                if (cachedImage) {
+                    console.log('[ClientCache] tracker-image hit', { trackerCacheKey });
+                    updateTrackerPreview(trackerId, cachedImage, info);
+                    return;
+                }
                 console.log('displayTracker: Fetching', url);
                 
                 const response = await timedFetch(url, {}, 'tracker-image');
@@ -3437,6 +3490,7 @@
                     updateTrackerPreview(trackerId, null, info, `Unable to load image for ${trackerId}: ${data.error}`);
                 } else if (data.image) {
                     console.log('displayTracker: Image loaded successfully');
+                    setLimitedCacheEntry(trackerImageCache, trackerCacheKey, data.image, 400);
                     updateTrackerPreview(trackerId, data.image, info);
                 } else {
                     console.error('displayTracker: No image in response', data);

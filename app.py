@@ -10,6 +10,7 @@ from io import BytesIO
 import base64
 import re
 import time
+from functools import lru_cache
 
 app = Flask(__name__)
 
@@ -40,6 +41,33 @@ def log_timing(label, start_time, **context):
     context_items = [f"{k}={v}" for k, v in context.items() if v is not None]
     context_suffix = f" ({', '.join(context_items)})" if context_items else ""
     print(f"[Timing] {label}: {elapsed_ms:.1f}ms{context_suffix}")
+
+
+def get_file_signature(file_path):
+    """Return a lightweight change signature for cache invalidation."""
+    stat = os.stat(file_path)
+    return stat.st_mtime_ns, stat.st_size
+
+
+@lru_cache(maxsize=128)
+def get_tracker_boundaries_cached(json_path, json_sig):
+    return load_tracker_boundaries(json_path)
+
+
+@lru_cache(maxsize=256)
+def get_tracker_info_cached(csv_path, csv_sig):
+    return load_tracker_info(csv_path)
+
+
+@lru_cache(maxsize=256)
+def get_tif_metadata_cached(tif_path, tif_sig):
+    with rasterio.open(tif_path) as src:
+        return list(src.transform), src.width, src.height, src.crs
+
+
+@lru_cache(maxsize=512)
+def tif_to_base64_cached(tif_path, max_size, tif_sig):
+    return tif_to_base64_uncached(tif_path, max_size=max_size)
 
 
 def normalize_status(status):
@@ -469,7 +497,8 @@ def get_sonrisa_zone_stage(project_layout_dir, zone, date_id=None):
         csv_path = find_sonrisa_zone_csv(folder, zone)
         if not csv_path or not os.path.exists(csv_path):
             continue
-        tracker_info = load_tracker_info(csv_path)
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         for info in tracker_info.values():
             stage = (info.get("stage") or "").lower().replace(" ", "_")
             if not stage:
@@ -771,7 +800,7 @@ def load_tracker_info(csv_path):
 
     return tracker_info
 
-def tif_to_base64(tif_path, max_size=2000):
+def tif_to_base64_uncached(tif_path, max_size=2000):
     """Convert TIFF to base64 PNG for web display"""
     convert_start = time.perf_counter()
     try:
@@ -837,6 +866,15 @@ def tif_to_base64(tif_path, max_size=2000):
         import traceback
         traceback.print_exc()
         return None
+
+
+def tif_to_base64(tif_path, max_size=2000):
+    """Convert TIFF to base64 PNG for web display with file-change-aware caching."""
+    try:
+        tif_sig = get_file_signature(tif_path)
+    except OSError:
+        return None
+    return tif_to_base64_cached(tif_path, max_size, tif_sig)
 
 @app.route('/')
 def select_project():
@@ -943,14 +981,12 @@ def get_layout_data(date_str):
             return jsonify({'error': 'JSON file not found'}), 404
 
         tif_meta_start = time.perf_counter()
-        with rasterio.open(tif_path) as src:
-            transform = list(src.transform)
-            width = src.width
-            height = src.height
-            tif_crs = src.crs
+        tif_sig = get_file_signature(tif_path)
+        transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
         log_timing("layout_tif_metadata", tif_meta_start, date=date_str, zone=zone, tif=zone_tif)
 
-        boundaries_raw = load_tracker_boundaries(json_path)
+        json_sig = get_file_signature(json_path)
+        boundaries_raw = get_tracker_boundaries_cached(json_path, json_sig)
         boundaries = {}
         for tracker_id, b in boundaries_raw.items():
             if normalize_zone_code(tracker_id) != zone:
@@ -960,7 +996,10 @@ def get_layout_data(date_str):
                 reproj = reproject_boundary(b, "EPSG:4326", tif_crs)
                 boundaries[normalized_id] = reproj
 
-        tracker_info_raw = load_tracker_info(csv_path) if csv_path and os.path.exists(csv_path) else {}
+        tracker_info_raw = {}
+        if csv_path and os.path.exists(csv_path):
+            csv_sig = get_file_signature(csv_path)
+            tracker_info_raw = get_tracker_info_cached(csv_path, csv_sig)
         tracker_info = {}
         for tracker_id, info in tracker_info_raw.items():
             normalized_id = normalize_tracker_id(tracker_id)
@@ -1026,8 +1065,12 @@ def get_layout_data(date_str):
     if not json_path or not os.path.exists(json_path):
         return jsonify({'error': 'JSON file not found'}), 404
     
-    boundaries = load_tracker_boundaries(json_path)
-    tracker_info = load_tracker_info(csv_path) if os.path.exists(csv_path) else {}
+    json_sig = get_file_signature(json_path)
+    boundaries = get_tracker_boundaries_cached(json_path, json_sig)
+    tracker_info = {}
+    if os.path.exists(csv_path):
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
     
     # Get TIFF transform info
     # Try to find TIFF in the date folder first, then fall back to LEWISTIFS_DIR
@@ -1039,10 +1082,8 @@ def get_layout_data(date_str):
             return jsonify({'error': 'TIFF file not found'}), 404
     
     tif_meta_start = time.perf_counter()
-    with rasterio.open(tif_path) as src:
-        transform = list(src.transform)
-        width = src.width
-        height = src.height
+    tif_sig = get_file_signature(tif_path)
+    transform, width, height, _ = get_tif_metadata_cached(tif_path, tif_sig)
     log_timing("layout_tif_metadata", tif_meta_start, date=date_str, project=project, tif=os.path.basename(tif_path))
     
     # Get base image dimensions
@@ -1281,7 +1322,8 @@ def get_sonrisa_site_overview():
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
         if not csv_path or not os.path.exists(csv_path):
             continue
-        tracker_info = load_tracker_info(csv_path)
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         total = len(tracker_info)
         completed = 0
         for info in tracker_info.values():
@@ -1575,7 +1617,8 @@ def handle_click():
         if not json_path or not os.path.exists(json_path):
             return jsonify({'error': 'JSON file not found'}), 404
         
-        boundaries = load_tracker_boundaries(json_path)
+        json_sig = get_file_signature(json_path)
+        boundaries = get_tracker_boundaries_cached(json_path, json_sig)
         if project == "Sonrisa":
             normalized_boundaries = {}
             for tracker_id, b in boundaries.items():
