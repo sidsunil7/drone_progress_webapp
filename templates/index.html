@@ -985,6 +985,10 @@
         const layoutImageBlobCache = new Map();
         const pendingLayoutImageRequests = new Map();
         const trackerImageCache = new Map();
+        const zoneMapDataCache = new Map();
+        const siteOverviewCache = new Map();
+        let zoneMapUpdateTimer = null;
+        let latestZoneMapDateRequest = null;
 
         // Analytics data
         let allDateSummaries = {}; // {dateStr: {stageStatusCounts, totalTrackers}}
@@ -1119,7 +1123,7 @@
                     backProjectsBtn.addEventListener('click', returnToProjectSelection);
                 }
 
-                const resp = await fetch('/api/sonrisa/zones');
+                const resp = await timedFetch('/api/sonrisa/zones', {}, 'sonrisa-zones');
                 const data = await resp.json();
                 if (data.error) {
                     showError(data.error);
@@ -1129,7 +1133,7 @@
                 zoneMeta = data;
                 const blockMapImg = document.getElementById('sonrisaBlockMap');
                 if (blockMapImg && data.block_map_url) {
-                    blockMapImg.src = `${data.block_map_url}?v=${Date.now()}`;
+                    blockMapImg.src = data.block_map_url;
                     blockMapImg.addEventListener('click', (event) => {
                         const zone = getZoneFromClick(event);
                         if (zone) {
@@ -1138,7 +1142,7 @@
                     });
                 }
 
-                const dateResp = await fetch('/api/sonrisa/dates');
+                const dateResp = await timedFetch('/api/sonrisa/dates', {}, 'sonrisa-dates');
                 const dateData = await dateResp.json();
                 if (!dateData.error && Array.isArray(dateData.dates) && dateData.dates.length > 0) {
                     zoneMapDates = dateData.dates;
@@ -1153,6 +1157,12 @@
                         document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
                         document.getElementById('timelineCurrent').textContent = availableDates[0].display;
                         slider.oninput = (e) => {
+                            const index = parseInt(e.target.value);
+                            const selectedDate = availableDates[index];
+                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            scheduleZoneMapUpdate(selectedDate.date);
+                        };
+                        slider.onchange = (e) => {
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
                             document.getElementById('timelineCurrent').textContent = selectedDate.display;
@@ -1292,6 +1302,12 @@
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
                         document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        scheduleZoneMapUpdate(selectedDate.date);
+                    };
+                    slider.onchange = (e) => {
+                        const index = parseInt(e.target.value);
+                        const selectedDate = availableDates[index];
+                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
                         updateZoneMapForDate(selectedDate.date);
                     };
                     renderTimelineDots();
@@ -1318,15 +1334,31 @@
         }
 
         async function updateZoneMapForDate(dateId) {
+            if (!dateId) return;
+            latestZoneMapDateRequest = dateId;
             const blockMapImg = document.getElementById('sonrisaBlockMap');
-            const url = `/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`;
-            const resp = await fetch(url);
-            const data = await resp.json();
-            if (!data.error) {
-                zoneMeta = data;
+            const cacheKey = `${dateId}`;
+            let data = zoneMapDataCache.get(cacheKey);
+            if (!data) {
+                const url = `/api/sonrisa/zones?date=${encodeURIComponent(dateId)}`;
+                const resp = await timedFetch(url, {}, 'sonrisa-zones-by-date');
+                data = await resp.json();
+                if (!data.error) {
+                    setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
+                }
+            } else {
+                console.log('[ClientCache] sonrisa-zones-by-date hit', { dateId });
             }
+            if (latestZoneMapDateRequest !== dateId) {
+                return;
+            }
+            if (!data.error) zoneMeta = data;
             if (blockMapImg) {
-                blockMapImg.src = `/api/sonrisa/block_map?date=${encodeURIComponent(dateId)}&v=${Date.now()}`;
+                const nextSrc = getZoneMapImageUrl(dateId);
+                if (blockMapImg.dataset.currentSrc !== nextSrc) {
+                    blockMapImg.src = nextSrc;
+                    blockMapImg.dataset.currentSrc = nextSrc;
+                }
             }
             await renderSiteOverviewTable(dateId);
         }
@@ -1334,9 +1366,16 @@
         async function renderSiteOverviewTable(dateId) {
             const container = document.getElementById('siteOverviewTable');
             if (!container || PROJECT !== 'Sonrisa') return;
-
-            const resp = await fetch(`/api/sonrisa/site_overview?date=${encodeURIComponent(dateId)}`);
-            const data = await resp.json();
+            let data = siteOverviewCache.get(dateId);
+            if (!data) {
+                const resp = await timedFetch(`/api/sonrisa/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'sonrisa-site-overview');
+                data = await resp.json();
+                if (!data.error) {
+                    setLimitedCacheEntry(siteOverviewCache, dateId, data, 120);
+                }
+            } else {
+                console.log('[ClientCache] sonrisa-site-overview hit', { dateId });
+            }
             if (data.error || !data.zones) {
                 container.innerHTML = '<div class="filter-summary-text">' + (data.error || 'No zone data for this date.') + '</div>';
                 return;
@@ -2319,6 +2358,21 @@
                 const oldestKey = map.keys().next().value;
                 map.delete(oldestKey);
             }
+        }
+
+        function getZoneMapImageUrl(dateId) {
+            if (!dateId) return '/api/sonrisa/block_map';
+            return `/api/sonrisa/block_map?date=${encodeURIComponent(dateId)}`;
+        }
+
+        function scheduleZoneMapUpdate(dateId, delayMs = 180) {
+            if (!dateId) return;
+            if (zoneMapUpdateTimer) {
+                clearTimeout(zoneMapUpdateTimer);
+            }
+            zoneMapUpdateTimer = setTimeout(() => {
+                updateZoneMapForDate(dateId);
+            }, delayMs);
         }
         
         async function loadLayout(dateStr, preserveState = false) {

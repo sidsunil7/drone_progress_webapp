@@ -1392,6 +1392,7 @@ def get_layout_image(date_str, filename):
 
 @app.route('/api/sonrisa/zones')
 def get_sonrisa_zones():
+    request_start = time.perf_counter()
     project = get_project_from_request()
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
@@ -1414,7 +1415,7 @@ def get_sonrisa_zones():
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
-    return jsonify({
+    response = jsonify({
         'zones': [
             {
                 'zone': zone,
@@ -1433,10 +1434,13 @@ def get_sonrisa_zones():
         'overall_bounds': overall_bounds,
         'block_map_url': '/api/sonrisa/block_map'
     })
+    log_timing("get_sonrisa_zones", request_start, date=date_id, zones=len(available_zones))
+    return response
 
 
 @app.route('/api/sonrisa/block_map')
 def get_sonrisa_block_map():
+    request_start = time.perf_counter()
     project = get_project_from_request()
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
@@ -1468,17 +1472,21 @@ def get_sonrisa_block_map():
     response = send_file(buffer, mimetype='image/png')
     response.headers['Cache-Control'] = 'no-store, max-age=0'
     response.headers['Pragma'] = 'no-cache'
+    log_timing("get_sonrisa_block_map", request_start, date=date_id, zones=len(available_zones))
     return response
 
 
 @app.route('/api/sonrisa/dates')
 def get_sonrisa_dates():
+    request_start = time.perf_counter()
     project = get_project_from_request()
     if project != "Sonrisa":
         return jsonify({'error': 'Invalid project'}), 400
     project_layout_dir = get_layout_dir(project)
     dates = get_sonrisa_all_dates(project_layout_dir)
-    return jsonify({'dates': dates})
+    response = jsonify({'dates': dates})
+    log_timing("get_sonrisa_dates", request_start, count=len(dates))
+    return response
 
 
 @app.route('/api/sonrisa/site_overview')
