@@ -33,7 +33,9 @@ jobs:
           path: |
             .
             !antenv/
-            !layout_data/
+            !.git/
+            !__pycache__/
+            !.venv/
 
   deploy:
     runs-on: ubuntu-latest
@@ -66,4 +68,4 @@ jobs:
         with:
           app-name: 'droneprogressviewer'
           slot-name: 'Production'
-          startup-command: 'LAYOUT_DIR=/home/site/wwwroot/layout_data gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
+          startup-command: 'gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
