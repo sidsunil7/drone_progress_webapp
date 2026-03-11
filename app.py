@@ -136,6 +136,94 @@ def tif_to_base64_cached(tif_path, max_size, tif_sig):
     return tif_to_base64_uncached(tif_path, max_size=max_size)
 
 
+_project_has_zones_cache = {}
+
+def _get_dir_signature(dir_path):
+    """Lightweight signature for a directory based on its mtime and child count."""
+    try:
+        st = os.stat(dir_path)
+        children = os.listdir(dir_path)
+        return (st.st_mtime_ns, len(children))
+    except OSError:
+        return (0, 0)
+
+
+@lru_cache(maxsize=32)
+def _zone_bounds_cached(json_path, json_sig):
+    """Cache zone bounds parsing keyed by file signature."""
+    if not json_path or not os.path.exists(json_path):
+        return {}
+    with open(json_path, 'r') as f:
+        data = json.load(f)
+    zone_bounds = {}
+    for entry in data.get("tableDetails", []):
+        zone = extract_zone_code_from_name(entry.get("tableName"))
+        if not zone:
+            continue
+        coords = [
+            entry.get("TopRightLatitude"),
+            entry.get("TopRightLongitude"),
+            entry.get("BottomLeftLatitude"),
+            entry.get("BottomLeftLongitude"),
+        ]
+        if any(v is None for v in coords):
+            continue
+        top_lat, right_lon, bottom_lat, left_lon = coords
+        min_lat = min(top_lat, bottom_lat)
+        max_lat = max(top_lat, bottom_lat)
+        min_lon = min(left_lon, right_lon)
+        max_lon = max(left_lon, right_lon)
+        if zone not in zone_bounds:
+            zone_bounds[zone] = [min_lat, min_lon, max_lat, max_lon]
+        else:
+            zb = zone_bounds[zone]
+            zb[0] = min(zb[0], min_lat)
+            zb[1] = min(zb[1], min_lon)
+            zb[2] = max(zb[2], max_lat)
+            zb[3] = max(zb[3], max_lon)
+    return zone_bounds
+
+
+@lru_cache(maxsize=32)
+def _available_zones_cached(project_layout_dir, dir_sig):
+    """Cache available zone list keyed by directory signature."""
+    zones = set()
+    if not project_layout_dir or not os.path.exists(project_layout_dir):
+        return tuple()
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        folder_zones, _, _ = parse_sonrisa_folder_info(item)
+        for zone in folder_zones:
+            zones.add(zone)
+    return tuple(sorted(zones))
+
+
+@lru_cache(maxsize=32)
+def _all_dates_cached(project_layout_dir, dir_sig):
+    """Cache all zone-level dates keyed by directory signature."""
+    if not project_layout_dir or not os.path.exists(project_layout_dir):
+        return tuple()
+    dates = {}
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        _, date_str, _ = parse_sonrisa_folder_info(item.strip())
+        if not date_str or not date_str.isdigit() or len(date_str) != 8:
+            continue
+        display = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+        dates[date_str] = {"date": date_str, "folder": item, "display": display}
+    return tuple(sorted(dates.values(), key=lambda x: x["date"]))
+
+
+@lru_cache(maxsize=256)
+def _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig):
+    """Cache zone stage computation."""
+    return get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+
+
 def normalize_status(status):
     """Normalize status strings to snake_case like 'not_started', 'in_progress', 'completed'."""
     if not status:
@@ -458,14 +546,22 @@ get_sonrisa_json_path = get_zone_json_path
 
 
 def project_has_zones(project):
-    """Check whether a project uses zone-based layout (has zone bounds in its JSON)."""
+    """Check whether a project uses zone-based layout (has zone bounds in its JSON).
+    Result is cached per project to avoid repeated filesystem scans."""
+    if project in _project_has_zones_cache:
+        return _project_has_zones_cache[project]
     project_layout_dir = get_layout_dir(project)
     json_path = get_zone_json_path(project_layout_dir)
     if not json_path:
+        _project_has_zones_cache[project] = False
         return False
-    zone_bounds = get_sonrisa_zone_bounds(json_path)
-    available_zones = get_sonrisa_available_zones(project_layout_dir)
-    return bool(zone_bounds) and len(available_zones) > 0
+    json_sig = get_file_signature(json_path)
+    zone_bounds = _zone_bounds_cached(json_path, json_sig)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    available_zones = _available_zones_cached(project_layout_dir, dir_sig)
+    result = bool(zone_bounds) and len(available_zones) > 0
+    _project_has_zones_cache[project] = result
+    return result
 
 
 def get_sonrisa_zone_bounds(json_path):
@@ -1419,10 +1515,12 @@ def get_zones():
     project_layout_dir = get_layout_dir(project)
     date_id = request.args.get("date")
     json_path = get_zone_json_path(project_layout_dir)
-    zone_bounds = get_sonrisa_zone_bounds(json_path)
-    available_zones = get_sonrisa_available_zones(project_layout_dir)
+    json_sig = get_file_signature(json_path) if json_path else (0, 0)
+    zone_bounds = _zone_bounds_cached(json_path, json_sig)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
     zone_stage = {
-        zone: get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        zone: _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
         for zone in available_zones
     }
     if date_id:
@@ -1472,11 +1570,13 @@ def get_block_map():
     ]
     existing_map = next((p for p in bg_candidates if os.path.exists(p)), None)
     json_path = get_zone_json_path(project_layout_dir)
-    zone_bounds = get_sonrisa_zone_bounds(json_path)
-    available_zones = get_sonrisa_available_zones(project_layout_dir)
+    json_sig = get_file_signature(json_path) if json_path else (0, 0)
+    zone_bounds = _zone_bounds_cached(json_path, json_sig)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
     zone_colors = {}
     for zone in available_zones:
-        stage = get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        stage = _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
         color = STAGE_COLORS.get(stage)
         if color:
             zone_colors[zone] = color
@@ -1548,7 +1648,8 @@ def get_zone_dates():
     request_start = time.perf_counter()
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
-    dates = get_sonrisa_all_dates(project_layout_dir)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    dates = list(_all_dates_cached(project_layout_dir, dir_sig))
     response = jsonify({'dates': dates})
     log_timing("get_zone_dates", request_start, project=project, count=len(dates))
     return response
@@ -1564,16 +1665,17 @@ def get_site_overview():
         return jsonify({'error': 'Date required'}), 400
 
     project_layout_dir = get_layout_dir(project)
-    available_zones = get_sonrisa_available_zones(project_layout_dir)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
     zone_stage = {
-        zone: get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+        zone: _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
         for zone in available_zones
     }
     available_zones = [z for z in available_zones if zone_stage.get(z)]
 
     rows = []
     stage_counts = {}
-    stage_status_counts = {}  # {stage: {status: count}}
+    stage_status_counts = {}
     for zone in available_zones:
         date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_id)
         if not date_folder_path:
@@ -1601,7 +1703,8 @@ def get_site_overview():
 
     completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
     json_path = get_zone_json_path(project_layout_dir)
-    all_zone_bounds = get_sonrisa_zone_bounds(json_path) if json_path else {}
+    json_sig = get_file_signature(json_path) if json_path else (0, 0)
+    all_zone_bounds = _zone_bounds_cached(json_path, json_sig) if json_path else {}
     return jsonify({
         "total_zones": len(all_zone_bounds) if all_zone_bounds else len(rows),
         "available_count": len(rows),

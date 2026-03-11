@@ -988,8 +988,10 @@
         const trackerImageCache = new Map();
         const zoneMapDataCache = new Map();
         const siteOverviewCache = new Map();
+        const pendingSiteOverviewRequests = new Map();
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
+        const pendingZoneMapRequests = new Map();
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
 
@@ -1281,6 +1283,7 @@
                             scheduleZoneMapUpdate(selectedDate.date);
                         };
                         slider.onchange = (e) => {
+                            if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
                             document.getElementById('timelineCurrent').textContent = selectedDate.display;
@@ -1431,6 +1434,7 @@
                         scheduleZoneMapUpdate(selectedDate.date);
                     };
                     slider.onchange = (e) => {
+                        if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
                         document.getElementById('timelineCurrent').textContent = selectedDate.display;
@@ -1466,9 +1470,22 @@
             const cacheKey = `${dateId}`;
             let data = zoneMapDataCache.get(cacheKey);
             if (!data) {
-                const url = `/api/zones?date=${encodeURIComponent(dateId)}`;
-                const resp = await timedFetch(url, {}, 'zones-by-date');
-                data = await resp.json();
+                let pending = pendingZoneMapRequests.get(cacheKey);
+                if (!pending) {
+                    pending = (async () => {
+                        const url = `/api/zones?date=${encodeURIComponent(dateId)}`;
+                        const resp = await timedFetch(url, {}, 'zones-by-date');
+                        return resp.json();
+                    })();
+                    pendingZoneMapRequests.set(cacheKey, pending);
+                } else {
+                    console.log('[ClientCache] zones-by-date in-flight reuse', { dateId });
+                }
+                try {
+                    data = await pending;
+                } finally {
+                    pendingZoneMapRequests.delete(cacheKey);
+                }
                 if (!data.error) {
                     setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
                 }
@@ -1492,8 +1509,21 @@
             if (!container || !HAS_ZONES) return;
             let data = siteOverviewCache.get(dateId);
             if (!data) {
-                const resp = await timedFetch(`/api/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'site-overview');
-                data = await resp.json();
+                let pending = pendingSiteOverviewRequests.get(dateId);
+                if (!pending) {
+                    pending = (async () => {
+                        const resp = await timedFetch(`/api/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'site-overview');
+                        return resp.json();
+                    })();
+                    pendingSiteOverviewRequests.set(dateId, pending);
+                } else {
+                    console.log('[ClientCache] site-overview in-flight reuse', { dateId });
+                }
+                try {
+                    data = await pending;
+                } finally {
+                    pendingSiteOverviewRequests.delete(dateId);
+                }
                 if (!data.error) {
                     setLimitedCacheEntry(siteOverviewCache, dateId, data, 120);
                 }
