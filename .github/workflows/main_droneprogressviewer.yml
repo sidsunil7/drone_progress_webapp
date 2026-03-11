@@ -40,7 +40,9 @@ jobs:
           path: |
             .
             !antenv/
-            !layout_data/
+            !.git/
+            !__pycache__/
+            !.venv/
 
       # 🚫 Opting Out of Oryx Build
       # If you prefer to disable the Oryx build process during deployment, follow these steps:
@@ -79,6 +81,6 @@ jobs:
         with:
           app-name: 'droneprogressviewer'
           slot-name: 'Production'
-          startup-command: 'LAYOUT_DIR=/home/site/wwwroot/layout_data gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
+          startup-command: 'gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
 
 
