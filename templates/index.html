@@ -992,6 +992,7 @@
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
         const pendingZoneMapRequests = new Map();
+        let latestSummaryRequestKey = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
 
@@ -1342,6 +1343,8 @@
 
         async function selectZone(zone) {
             selectedZone = zone;
+            latestSummaryRequestKey = `${zone}|${Date.now()}`;
+            const summaryRequestKey = latestSummaryRequestKey;
             const zonePicker = document.getElementById('zonePicker');
             const layoutWrapper = document.getElementById('layoutWrapper');
             const siteOverviewSection = document.getElementById('siteOverviewSection');
@@ -1366,14 +1369,6 @@
             }
 
             availableDates = data.dates;
-            await computeAllDateSummaries();
-            initializeManpowerConfig();
-            buildWorkingDaySeries();
-            renderManpowerTable();
-            renderDailyTable();
-            updateStageCompletionEstimates();
-            initializeCharts();
-            initializeDailyPieChart();
 
             const timelineContainer = document.getElementById('timelineContainer');
             if (availableDates.length > 1) {
@@ -1403,6 +1398,31 @@
 
             currentDate = availableDates[0].date;
             await loadLayout(currentDate);
+
+            // Build charts/tables in the background so zone switching is not
+            // blocked by per-date summary requests.
+            (async () => {
+                const summaryStart = performance.now();
+                try {
+                    await computeAllDateSummaries();
+                    if (latestSummaryRequestKey !== summaryRequestKey || selectedZone !== zone) return;
+                    initializeManpowerConfig();
+                    buildWorkingDaySeries();
+                    renderManpowerTable();
+                    renderDailyTable();
+                    updateStageCompletionEstimates();
+                    initializeCharts();
+                    initializeDailyPieChart();
+                    const summaryMs = performance.now() - summaryStart;
+                    console.log(
+                        `[MapTiming] zone-summary-build: ${(summaryMs / 1000).toFixed(3)}s (${summaryMs.toFixed(1)}ms)`,
+                        { zone, dates: availableDates.length }
+                    );
+                } catch (error) {
+                    if (latestSummaryRequestKey !== summaryRequestKey || selectedZone !== zone) return;
+                    console.error('Background zone summary build failed:', error);
+                }
+            })();
         }
 
         function returnToZonePicker() {
