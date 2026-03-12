@@ -1280,6 +1280,33 @@ def build_default_layout_response_cached(
     )
     return response_data
 
+
+@lru_cache(maxsize=256)
+def build_date_summary_cached(csv_path, csv_sig):
+    """Build lightweight per-date summary data from tracker CSV only."""
+    tracker_info = {}
+    if csv_path and csv_sig != (0, 0):
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+
+    summary = {
+        "stageStatusCounts": {},
+        "totalTrackers": len(tracker_info),
+        "trackerStages": [],
+    }
+
+    for info in tracker_info.values():
+        stage_key = (info.get("stage") or "").lower().replace(" ", "_")
+        status_key = (info.get("status") or "").lower().replace(" ", "_")
+        if stage_key:
+            summary["trackerStages"].append({"stage": stage_key, "status": status_key})
+        if not summary["stageStatusCounts"].get(stage_key):
+            summary["stageStatusCounts"][stage_key] = {}
+        if not summary["stageStatusCounts"][stage_key].get(status_key):
+            summary["stageStatusCounts"][stage_key][status_key] = 0
+        summary["stageStatusCounts"][stage_key][status_key] += 1
+
+    return summary
+
 @app.route('/')
 def select_project():
     """Project selection page"""
@@ -1298,6 +1325,70 @@ def project_home(project):
         'index.html', project=resolved_project, has_zones=has_zones
     ))
     response.set_cookie('project', resolved_project, samesite='Lax')
+    return response
+
+
+@app.route('/api/date_summary/<date_str>')
+def get_date_summary(date_str):
+    """Return lightweight summary data for charts/tables without full layout work."""
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    is_zone_project = project_has_zones(project)
+
+    if is_zone_project:
+        zone = normalize_zone_code(request.args.get('zone'))
+        if not zone:
+            return jsonify({'error': 'Zone required for this project'}), 400
+        date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
+        if not date_folder_path:
+            return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
+        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        calc_start = time.perf_counter()
+        summary = build_date_summary_cached(csv_path or "", csv_sig)
+        log_timing(
+            "date_summary_calc",
+            calc_start,
+            date=date_str,
+            project=project,
+            zone=zone,
+            trackers=summary["totalTrackers"],
+        )
+        response = jsonify(summary)
+        log_timing("get_date_summary", request_start, date=date_str, project=project, zone=zone)
+        return response
+
+    date_folder = f"{project}{date_str}"
+    date_folder_path = os.path.join(project_layout_dir, date_folder)
+    if not os.path.exists(date_folder_path):
+        return jsonify({'error': f'Date folder not found: {date_folder}'}), 404
+
+    base_image_files = [f for f in os.listdir(date_folder_path)
+                       if f.endswith('.jpg')
+                       and not f.endswith('_overlay.jpg')
+                       and not f.endswith('_stage_overlay.jpg')
+                       and not f.endswith('_status_overlay.jpg')
+                       and not f.endswith('_stage_status_overlay.jpg')
+                       and not f.endswith('_web.jpg')]
+    if not base_image_files:
+        return jsonify({'error': f'Base image not found for date {date_str}'}), 404
+
+    base_image_name = base_image_files[0]
+    date_match = base_image_name.replace('.jpg', '')
+    csv_path = os.path.join(date_folder_path, f"{date_match}_tracker_stages.csv")
+    csv_sig = optional_file_signature(csv_path)
+    calc_start = time.perf_counter()
+    summary = build_date_summary_cached(csv_path if csv_sig != (0, 0) else "", csv_sig)
+    log_timing(
+        "date_summary_calc",
+        calc_start,
+        date=date_str,
+        project=project,
+        trackers=summary["totalTrackers"],
+    )
+    response = jsonify(summary)
+    log_timing("get_date_summary", request_start, date=date_str, project=project)
     return response
 
 @app.route('/api/dates')

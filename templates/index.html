@@ -1696,28 +1696,9 @@
         async function computeAllDateSummaries() {
             allDateSummaries = {};
             for (const d of availableDates) {
-                const resp = await timedFetch(getLayoutUrl(d.date), {}, `date-summary-${d.date}`);
-                const ld = await resp.json();
-                if (!ld || ld.error) continue;
-
-                const summary = {
-                    stageStatusCounts: {},
-                    totalTrackers: Object.keys(ld.tracker_info || {}).length,
-                    trackerStages: [] // per-tracker current stage/status
-                };
-
-                Object.values(ld.tracker_info || {}).forEach(info => {
-                    const stageKey = (info.stage || '').toLowerCase().replace(/\s+/g, '_');
-                    const statusKey = (info.status || '').toLowerCase().replace(/\s+/g, '_');
-
-                    if (stageKey) {
-                        summary.trackerStages.push({ stage: stageKey, status: statusKey });
-                    }
-
-                    if (!summary.stageStatusCounts[stageKey]) summary.stageStatusCounts[stageKey] = {};
-                    if (!summary.stageStatusCounts[stageKey][statusKey]) summary.stageStatusCounts[stageKey][statusKey] = 0;
-                    summary.stageStatusCounts[stageKey][statusKey] += 1;
-                });
+                const resp = await timedFetch(getDateSummaryUrl(d.date), {}, `date-summary-${d.date}`);
+                const summary = await resp.json();
+                if (!summary || summary.error) continue;
 
                 // Ensure all combinations exist
                 stageDefinitions.forEach(s => {
@@ -2495,6 +2476,13 @@
                 return `/api/tracker/${currentDate}/${trackerId}?zone=${encodeURIComponent(selectedZone)}`;
             }
             return `/api/tracker/${currentDate}/${trackerId}`;
+        }
+
+        function getDateSummaryUrl(dateStr) {
+            if (HAS_ZONES && selectedZone) {
+                return `/api/date_summary/${dateStr}?zone=${encodeURIComponent(selectedZone)}`;
+            }
+            return `/api/date_summary/${dateStr}`;
         }
 
         async function timedFetch(url, options = {}, label = 'fetch') {
