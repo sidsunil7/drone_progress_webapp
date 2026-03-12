@@ -49,6 +49,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: python-app
+          path: python-app
 
       - name: Login to Azure
         uses: azure/login@v2
@@ -68,4 +69,5 @@ jobs:
         with:
           app-name: 'droneprogressviewer'
           slot-name: 'Production'
+          package: python-app
           startup-command: 'gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'
