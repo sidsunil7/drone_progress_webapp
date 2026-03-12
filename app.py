@@ -218,10 +218,38 @@ def _all_dates_cached(project_layout_dir, dir_sig):
     return tuple(sorted(dates.values(), key=lambda x: x["date"]))
 
 
-@lru_cache(maxsize=256)
-def _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig):
-    """Cache zone stage computation."""
-    return get_sonrisa_zone_stage(project_layout_dir, zone, date_id=date_id)
+@lru_cache(maxsize=64)
+def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
+    """Compute ALL zone stages in a single directory scan, keyed by (dir, date, sig).
+    Returns a frozen dict-like tuple of (zone, stage) pairs for the given date.
+    This replaces the old per-zone approach that called os.listdir() 54 times."""
+    if not project_layout_dir or not date_id or not os.path.exists(project_layout_dir):
+        return {}
+    folder_zone_map = {}
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        folder_zones, folder_date, _ = parse_sonrisa_folder_info(item.strip())
+        if folder_date == date_id and folder_zones:
+            for z in folder_zones:
+                if z not in folder_zone_map:
+                    folder_zone_map[z] = item_path
+    result = {}
+    for zone, folder_path in folder_zone_map.items():
+        csv_path = find_sonrisa_zone_csv(folder_path, zone)
+        if not csv_path or not os.path.exists(csv_path):
+            continue
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+        counts = {}
+        for info in tracker_info.values():
+            stage = (info.get("stage") or "").lower().replace(" ", "_")
+            if stage:
+                counts[stage] = counts.get(stage, 0) + 1
+        if counts:
+            result[zone] = max(counts.items(), key=lambda x: x[1])[0]
+    return result
 
 
 def normalize_status(status):
@@ -1519,15 +1547,17 @@ def get_zones():
     zone_bounds = _zone_bounds_cached(json_path, json_sig)
     dir_sig = _get_dir_signature(project_layout_dir)
     available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
-    zone_stage = {
-        zone: _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
-        for zone in available_zones
-    }
-    if date_id:
-        available_zones = [zone for zone in available_zones if zone_stage.get(zone)]
 
     if not zone_bounds:
         return jsonify({'error': 'Zone boundaries not found'}), 404
+
+    # Batch-fetch all zone stages in ONE directory scan (avoids 54x listdir).
+    # Skip entirely when no date is requested — stages are unused for initial load.
+    if date_id:
+        zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+        available_zones = [z for z in available_zones if zone_stage.get(z)]
+    else:
+        zone_stage = {}
 
     overall_bounds = compute_zone_overall_bounds(zone_bounds)
     if not overall_bounds:
@@ -1575,13 +1605,13 @@ def get_block_map():
     dir_sig = _get_dir_signature(project_layout_dir)
     available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
     zone_colors = {}
-    for zone in available_zones:
-        stage = _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
-        color = STAGE_COLORS.get(stage)
-        if color:
-            zone_colors[zone] = color
     if date_id:
-        available_zones = [zone for zone in available_zones if zone in zone_colors]
+        zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+        for zone, stage in zone_stage.items():
+            color = STAGE_COLORS.get(stage)
+            if color:
+                zone_colors[zone] = color
+        available_zones = [z for z in available_zones if z in zone_colors]
     img, _ = build_sonrisa_block_map(
         zone_bounds,
         available_zones,
@@ -1620,9 +1650,16 @@ def get_block_map_bg():
             log_timing("get_block_map_bg", request_start, project=project, result="304")
             return make_not_modified_response(etag)
         fmt = "webp" if "image/webp" in request.headers.get("Accept", "") else "jpeg"
-        img_bytes = encode_image_file_cached(existing_map, sig, fmt, 85 if fmt == "webp" else 90, 1600)
+        img_bytes, content_type, _, _ = encode_image_file_cached(
+            existing_map,
+            sig,
+            fmt,
+            85 if fmt == "webp" else 90,
+            1600,
+        )
         response = make_response(img_bytes)
-        response.headers["Content-Type"] = f"image/{fmt}"
+        response.headers["Content-Type"] = content_type
+        response.headers["Content-Length"] = str(len(img_bytes))
         apply_cache_headers(response, etag, max_age=86400)
     else:
         json_path = get_zone_json_path(project_layout_dir)
