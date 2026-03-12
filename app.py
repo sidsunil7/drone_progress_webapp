@@ -223,6 +223,7 @@ def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
     """Compute ALL zone stages in a single directory scan, keyed by (dir, date, sig).
     Returns a frozen dict-like tuple of (zone, stage) pairs for the given date.
     This replaces the old per-zone approach that called os.listdir() 54 times."""
+    calc_start = time.perf_counter()
     if not project_layout_dir or not date_id or not os.path.exists(project_layout_dir):
         return {}
     folder_zone_map = {}
@@ -249,6 +250,13 @@ def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
                 counts[stage] = counts.get(stage, 0) + 1
         if counts:
             result[zone] = max(counts.items(), key=lambda x: x[1])[0]
+    log_timing(
+        "zone_stage_calculation",
+        calc_start,
+        date=date_id,
+        folders=len(folder_zone_map),
+        zones=len(result),
+    )
     return result
 
 
@@ -1099,7 +1107,12 @@ def build_sonrisa_layout_response_cached(
     web_path,
     web_sig,
 ):
+    calc_start = time.perf_counter()
+    tif_meta_start = time.perf_counter()
     transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
+    log_timing("layout_calc_tif_metadata", tif_meta_start, date=date_str, zone=zone)
+
+    boundaries_start = time.perf_counter()
     boundaries_raw = get_tracker_boundaries_cached(json_path, json_sig)
     boundaries = {}
     for tracker_id, boundary in boundaries_raw.items():
@@ -1108,23 +1121,47 @@ def build_sonrisa_layout_response_cached(
         normalized_id = normalize_tracker_id(tracker_id)
         if normalized_id:
             boundaries[normalized_id] = reproject_boundary(boundary, "EPSG:4326", tif_crs)
+    log_timing(
+        "layout_calc_boundaries",
+        boundaries_start,
+        date=date_str,
+        zone=zone,
+        boundaries=len(boundaries),
+    )
 
     tracker_info = {}
     if csv_path and csv_sig != (0, 0):
+        tracker_info_start = time.perf_counter()
         tracker_info_raw = get_tracker_info_cached(csv_path, csv_sig)
         for tracker_id, info in tracker_info_raw.items():
             normalized_id = normalize_tracker_id(tracker_id)
             if normalized_id:
                 tracker_info[normalized_id] = info
+        log_timing(
+            "layout_calc_tracker_info",
+            tracker_info_start,
+            date=date_str,
+            zone=zone,
+            trackers=len(tracker_info),
+        )
 
     display_width = None
     display_height = None
     if web_path and web_sig != (0, 0):
+        display_size_start = time.perf_counter()
         display_width, display_height = get_image_dimensions_cached(web_path, web_sig)
+        log_timing(
+            "layout_calc_display_dimensions",
+            display_size_start,
+            date=date_str,
+            zone=zone,
+            width=display_width,
+            height=display_height,
+        )
     if not display_width or not display_height:
         display_width, display_height, _ = get_display_dimensions(width, height, max_size=2000)
 
-    return {
+    response_data = {
         'boundaries': boundaries,
         'tracker_info': tracker_info,
         'transform': transform,
@@ -1138,6 +1175,15 @@ def build_sonrisa_layout_response_cached(
         'image_scale_factor': (width / display_width) if display_width else 1.0,
         'date': date_str
     }
+    log_timing(
+        "layout_calc_response_build",
+        calc_start,
+        date=date_str,
+        zone=zone,
+        trackers=len(tracker_info),
+        boundaries=len(boundaries),
+    )
+    return response_data
 
 
 @lru_cache(maxsize=128)
@@ -1157,11 +1203,31 @@ def build_default_layout_response_cached(
     base_image_name,
     overlay_image_name,
 ):
+    calc_start = time.perf_counter()
+    tif_meta_start = time.perf_counter()
     transform, width, height, _ = get_tif_metadata_cached(tif_path, tif_sig)
+    log_timing("layout_calc_tif_metadata", tif_meta_start, date=date_str, project=project)
+
+    boundaries_start = time.perf_counter()
     boundaries = get_tracker_boundaries_cached(json_path, json_sig)
+    log_timing(
+        "layout_calc_boundaries",
+        boundaries_start,
+        date=date_str,
+        project=project,
+        boundaries=len(boundaries),
+    )
     tracker_info = {}
     if csv_path and csv_sig != (0, 0):
+        tracker_info_start = time.perf_counter()
         tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+        log_timing(
+            "layout_calc_tracker_info",
+            tracker_info_start,
+            date=date_str,
+            project=project,
+            trackers=len(tracker_info),
+        )
 
     original_width = None
     original_height = None
@@ -1170,6 +1236,7 @@ def build_default_layout_response_cached(
     scale_factor = 1.0
 
     if base_image_path and base_image_sig != (0, 0):
+        image_dims_start = time.perf_counter()
         original_width, original_height = get_image_dimensions_cached(base_image_path, base_image_sig)
         if display_image_path and display_image_sig != (0, 0):
             display_width, display_height = get_image_dimensions_cached(display_image_path, display_image_sig)
@@ -1178,6 +1245,14 @@ def build_default_layout_response_cached(
         else:
             display_width = original_width
             display_height = original_height
+        log_timing(
+            "layout_calc_display_dimensions",
+            image_dims_start,
+            date=date_str,
+            project=project,
+            width=display_width,
+            height=display_height,
+        )
 
     response_data = {
         'boundaries': boundaries,
@@ -1195,6 +1270,14 @@ def build_default_layout_response_cached(
     }
     if overlay_image_name:
         response_data['overlay_image'] = f'/api/image/layout/{date_str}/{overlay_image_name}'
+    log_timing(
+        "layout_calc_response_build",
+        calc_start,
+        date=date_str,
+        project=project,
+        trackers=len(tracker_info),
+        boundaries=len(boundaries),
+    )
     return response_data
 
 @app.route('/')
@@ -1542,11 +1625,20 @@ def get_zones():
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
     date_id = request.args.get("date")
+    setup_start = time.perf_counter()
     json_path = get_zone_json_path(project_layout_dir)
     json_sig = get_file_signature(json_path) if json_path else (0, 0)
     zone_bounds = _zone_bounds_cached(json_path, json_sig)
     dir_sig = _get_dir_signature(project_layout_dir)
     available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    log_timing(
+        "zones_calc_setup",
+        setup_start,
+        project=project,
+        date=date_id,
+        zone_bounds=len(zone_bounds),
+        available=len(available_zones),
+    )
 
     if not zone_bounds:
         return jsonify({'error': 'Zone boundaries not found'}), 404
@@ -1554,15 +1646,27 @@ def get_zones():
     # Batch-fetch all zone stages in ONE directory scan (avoids 54x listdir).
     # Skip entirely when no date is requested — stages are unused for initial load.
     if date_id:
+        stage_start = time.perf_counter()
         zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
         available_zones = [z for z in available_zones if zone_stage.get(z)]
+        log_timing(
+            "zones_calc_stage_filter",
+            stage_start,
+            project=project,
+            date=date_id,
+            staged=len(zone_stage),
+            available=len(available_zones),
+        )
     else:
         zone_stage = {}
 
+    overall_start = time.perf_counter()
     overall_bounds = compute_zone_overall_bounds(zone_bounds)
+    log_timing("zones_calc_overall_bounds", overall_start, project=project, date=date_id)
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
+    serialize_start = time.perf_counter()
     response = jsonify({
         'zones': [
             {
@@ -1582,6 +1686,7 @@ def get_zones():
         'overall_bounds': overall_bounds,
         'block_map_url': '/api/block_map'
     })
+    log_timing("zones_calc_response_serialize", serialize_start, project=project, date=date_id)
     log_timing("get_zones", request_start, project=project, date=date_id, zones=len(available_zones))
     return response
 
@@ -1696,23 +1801,31 @@ def get_zone_dates():
 @app.route('/api/sonrisa/site_overview')
 def get_site_overview():
     """Return site-level zone summary (total, completed, %) for a date. CSV-only, no TIFFs."""
+    request_start = time.perf_counter()
     project = get_project_from_request()
     date_id = request.args.get("date")
     if not date_id:
         return jsonify({'error': 'Date required'}), 400
 
     project_layout_dir = get_layout_dir(project)
+    setup_start = time.perf_counter()
     dir_sig = _get_dir_signature(project_layout_dir)
     available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
-    zone_stage = {
-        zone: _zone_stage_cached(project_layout_dir, zone, date_id, dir_sig)
-        for zone in available_zones
-    }
+    zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
     available_zones = [z for z in available_zones if zone_stage.get(z)]
+    log_timing(
+        "site_overview_calc_setup",
+        setup_start,
+        project=project,
+        date=date_id,
+        available=len(available_zones),
+        staged=len(zone_stage),
+    )
 
     rows = []
     stage_counts = {}
     stage_status_counts = {}
+    aggregation_start = time.perf_counter()
     for zone in available_zones:
         date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_id)
         if not date_folder_path:
@@ -1737,12 +1850,23 @@ def get_site_overview():
                 stage_status_counts[stage][status_norm] = stage_status_counts[stage].get(status_norm, 0) + 1
         pct = (completed / total * 100) if total > 0 else 0.0
         rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
+    log_timing(
+        "site_overview_calc_aggregate",
+        aggregation_start,
+        project=project,
+        date=date_id,
+        rows=len(rows),
+        stages=len(stage_counts),
+    )
 
     completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
+    bounds_start = time.perf_counter()
     json_path = get_zone_json_path(project_layout_dir)
     json_sig = get_file_signature(json_path) if json_path else (0, 0)
     all_zone_bounds = _zone_bounds_cached(json_path, json_sig) if json_path else {}
-    return jsonify({
+    log_timing("site_overview_calc_bounds", bounds_start, project=project, date=date_id, total_zones=len(all_zone_bounds))
+    serialize_start = time.perf_counter()
+    response = jsonify({
         "total_zones": len(all_zone_bounds) if all_zone_bounds else len(rows),
         "available_count": len(rows),
         "completed_zones_count": completed_zones,
@@ -1750,6 +1874,9 @@ def get_site_overview():
         "stage_counts": stage_counts,
         "stage_status_counts": stage_status_counts,
     })
+    log_timing("site_overview_calc_response_serialize", serialize_start, project=project, date=date_id)
+    log_timing("get_site_overview", request_start, project=project, date=date_id, rows=len(rows))
+    return response
 
 
 @app.route('/api/zone/image/<zone>/<date_str>')
