@@ -285,11 +285,11 @@
             padding: 4px 15px;
             background: transparent;
             border-radius: 0;
-            width: auto;
-            max-width: none;
+            width: 100%;
+            max-width: 100%;
             display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             min-width: 0;
             z-index: 10;
         }
@@ -993,6 +993,7 @@
         let latestZoneMapDateRequest = null;
         const pendingZoneMapRequests = new Map();
         let latestSummaryRequestKey = null;
+        let lastZonePickerDateId = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
 
@@ -1268,6 +1269,7 @@
                 if (!dateData.error && Array.isArray(dateData.dates) && dateData.dates.length > 0) {
                     zoneMapDates = dateData.dates;
                     availableDates = zoneMapDates;
+                    lastZonePickerDateId = zoneMapDates[0].date;
                     const timelineContainer = document.getElementById('timelineContainer');
                     if (timelineContainer) {
                         timelineContainer.style.display = 'block';
@@ -1369,16 +1371,20 @@
             }
 
             availableDates = data.dates;
+            const preferredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
+                ? lastZonePickerDateId
+                : availableDates[0].date;
 
             const timelineContainer = document.getElementById('timelineContainer');
             if (availableDates.length > 1) {
                 timelineContainer.style.display = 'block';
                 const slider = document.getElementById('timelineSlider');
                 slider.max = availableDates.length - 1;
-                slider.value = 0;
+                const preferredZoneDateIndex = Math.max(0, availableDates.findIndex(d => d.date === preferredZoneDateId));
+                slider.value = preferredZoneDateIndex;
                 document.getElementById('timelineStart').textContent = availableDates[0].display;
                 document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                document.getElementById('timelineCurrent').textContent = availableDates[preferredZoneDateIndex].display;
                 slider.oninput = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
@@ -1396,7 +1402,7 @@
                 timelineContainer.style.display = 'none';
             }
 
-            currentDate = availableDates[0].date;
+            currentDate = preferredZoneDateId;
             await loadLayout(currentDate);
 
             // Build charts/tables in the background so zone switching is not
@@ -1442,11 +1448,15 @@
                 timelineContainer.style.display = availableDates.length > 1 ? 'block' : 'none';
                 if (availableDates.length > 0) {
                     const slider = document.getElementById('timelineSlider');
+                    const restoredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
+                        ? lastZonePickerDateId
+                        : availableDates[0].date;
+                    const restoredZoneDateIndex = Math.max(0, availableDates.findIndex(d => d.date === restoredZoneDateId));
                     slider.max = availableDates.length - 1;
-                    slider.value = 0;
+                    slider.value = restoredZoneDateIndex;
                     document.getElementById('timelineStart').textContent = availableDates[0].display;
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                    document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                    document.getElementById('timelineCurrent').textContent = availableDates[restoredZoneDateIndex].display;
                     slider.oninput = (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
@@ -1461,7 +1471,7 @@
                         updateZoneMapForDate(selectedDate.date);
                     };
                     renderTimelineDots();
-                    updateZoneMapForDate(availableDates[0].date);
+                    updateZoneMapForDate(restoredZoneDateId);
                 }
             }
             isZonePickerActive = true;
@@ -1474,7 +1484,7 @@
             renderStageFilters();
             renderStatusFilters();
             if (availableDates.length > 0) {
-                renderSiteOverviewTable(availableDates[0].date);
+                renderSiteOverviewTable(lastZonePickerDateId || availableDates[0].date);
             }
 
             const mapTab = document.querySelector('.view-tab[data-view="map"]');
@@ -1487,6 +1497,7 @@
             const updateStart = performance.now();
             if (!dateId) return;
             latestZoneMapDateRequest = dateId;
+            lastZonePickerDateId = dateId;
             const cacheKey = `${dateId}`;
             let data = zoneMapDataCache.get(cacheKey);
             if (!data) {
