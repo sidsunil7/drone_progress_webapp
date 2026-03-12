@@ -1030,10 +1030,6 @@
             const latRange = ob.max_lat - ob.min_lat;
             if (lonRange === 0 || latRange === 0) return;
 
-            ctx.font = '11px sans-serif';
-            ctx.textBaseline = 'middle';
-            ctx.textAlign = 'center';
-
             for (const z of (zoneData.zones || [])) {
                 const b = z.bounds;
                 if (!b) continue;
@@ -1054,19 +1050,6 @@
                 ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
                 ctx.lineWidth = 2;
                 ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
-
-                const cx = (x1 + x2) / 2;
-                const cy = (y1 + y2) / 2;
-                const label = z.zone;
-                const tm = ctx.measureText(label);
-                const pad = 4;
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.86)';
-                ctx.fillRect(cx - tm.width / 2 - pad, cy - 7, tm.width + pad * 2, 14);
-                ctx.strokeStyle = 'rgba(0, 0, 0, 0.78)';
-                ctx.lineWidth = 1;
-                ctx.strokeRect(cx - tm.width / 2 - pad, cy - 7, tm.width + pad * 2, 14);
-                ctx.fillStyle = '#000';
-                ctx.fillText(label, cx, cy);
             }
             const elapsed = performance.now() - mapStart;
             console.log(`[MapTiming] drawBlockMapCanvas: ${(elapsed / 1000).toFixed(3)}s (${elapsed.toFixed(1)}ms)`,
