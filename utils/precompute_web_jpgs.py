@@ -1,23 +1,24 @@
 #!/usr/bin/env python3
-"""Precompute web-friendly JPEGs from TIFF files.
+"""Precompute web-friendly JPEGs from zone TIFF files.
 
-This script walks a root directory, finds `.tif` / `.tiff` files, and creates
-matching `_web.jpg` files next to them. It is intended for preprocessing large
-zone TIFFs ahead of time so the web app does not generate JPEGs during
-requests.
+This script walks a root directory, finds zone TIFF files whose basename
+matches `G<number>_zone`, and creates matching `_web.jpg` files next to them.
+It is intended for preprocessing large zone TIFFs ahead of time so the web app
+does not generate JPEGs during requests.
 
 Examples:
   python precompute_web_jpgs.py --root layout_data/Sonrisa
   python precompute_web_jpgs.py --root /mnt/fileshare/layout_data --force
-  python precompute_web_jpgs.py --root layout_data/Sonrisa --only-zone-tiffs
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 import time
+from itertools import chain
 from pathlib import Path
 
 import numpy as np
@@ -26,20 +27,23 @@ from PIL import Image
 
 
 Image.MAX_IMAGE_PIXELS = 2_000_000_000
+ZONE_TIFF_STEM_RE = re.compile(r"^G\d+_zone$", re.IGNORECASE)
+
+def is_zone_tiff(path: Path) -> bool:
+    return path.suffix.lower() in {".tif", ".tiff"} and bool(ZONE_TIFF_STEM_RE.fullmatch(path.stem))
 
 
-def iter_tiff_files(root: Path, only_zone_tiffs: bool) -> list[Path]:
-    matches: list[Path] = []
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        suffix = path.suffix.lower()
-        if suffix not in {".tif", ".tiff"}:
-            continue
-        if only_zone_tiffs and not path.stem.lower().endswith("_zone"):
-            continue
-        matches.append(path)
-    return sorted(matches)
+def iter_zone_tiff_batches(root: Path):
+    """Yield one folder at a time to keep processing sequential and predictable."""
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        batch = []
+        for filename in sorted(filenames):
+            path = Path(dirpath) / filename
+            if is_zone_tiff(path):
+                batch.append(path)
+        if batch:
+            yield Path(dirpath), batch
 
 
 def tif_to_rgb_image(tif_path: Path, max_dimension: int) -> Image.Image:
@@ -100,7 +104,7 @@ def convert_one_tiff(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Precompute _web.jpg files from TIFFs.")
+    parser = argparse.ArgumentParser(description="Precompute _web.jpg files from zone TIFFs.")
     parser.add_argument(
         "--root",
         required=True,
@@ -124,9 +128,10 @@ def main() -> int:
         help="Regenerate _web.jpg even if it already exists.",
     )
     parser.add_argument(
-        "--only-zone-tiffs",
-        action="store_true",
-        help="Only convert TIFFs whose basename ends with _zone.",
+        "--sleep-seconds",
+        type=float,
+        default=0.0,
+        help="Optional pause between conversions to reduce load on the server. Default: 0",
     )
     args = parser.parse_args()
 
@@ -138,43 +143,50 @@ def main() -> int:
         print(f"Root path is not a directory: {root}", file=sys.stderr)
         return 1
 
-    tif_files = iter_tiff_files(root, only_zone_tiffs=args.only_zone_tiffs)
-    if not tif_files:
-        print(f"No TIFF files found under {root}")
+    batches = iter_zone_tiff_batches(root)
+    first_batch = next(batches, None)
+    if not first_batch:
+        print(f"No zone TIFF files matching G<number>_zone.tif/.tiff found under {root}")
         return 0
 
     print(f"Scanning {root}")
-    print(f"Found {len(tif_files)} TIFF files")
+    print("Processing zone TIFFs one folder at a time")
 
     created = 0
     skipped = 0
     failed = 0
     total_seconds = 0.0
+    folder_count = 0
 
-    for tif_path in tif_files:
-        try:
-            web_path = tif_path.with_name(f"{tif_path.stem}_web.jpg")
-            existed_before = web_path.exists()
-            status, out_path, elapsed = convert_one_tiff(
-                tif_path,
-                max_dimension=args.max_dimension,
-                quality=args.quality,
-                force=args.force,
-            )
-            total_seconds += elapsed
-            if status == "skipped":
-                skipped += 1
-                print(f"SKIP   {tif_path}")
-            else:
-                created += 1
-                verb = "UPDATE" if existed_before and args.force else "CREATE"
-                print(f"{verb:<6} {tif_path} -> {out_path} ({elapsed:.2f}s)")
-        except Exception as exc:
-            failed += 1
-            print(f"ERROR  {tif_path}: {exc}", file=sys.stderr)
+    for folder_path, tif_paths in chain([first_batch], batches):
+        folder_count += 1
+        print(f"\nFolder {folder_count}: {folder_path} ({len(tif_paths)} file(s))")
+        for tif_path in tif_paths:
+            try:
+                web_path = tif_path.with_name(f"{tif_path.stem}_web.jpg")
+                existed_before = web_path.exists()
+                status, out_path, elapsed = convert_one_tiff(
+                    tif_path,
+                    max_dimension=args.max_dimension,
+                    quality=args.quality,
+                    force=args.force,
+                )
+                total_seconds += elapsed
+                if status == "skipped":
+                    skipped += 1
+                    print(f"SKIP   {tif_path}")
+                else:
+                    created += 1
+                    verb = "UPDATE" if existed_before and args.force else "CREATE"
+                    print(f"{verb:<6} {tif_path} -> {out_path} ({elapsed:.2f}s)")
+                if args.sleep_seconds > 0:
+                    time.sleep(args.sleep_seconds)
+            except Exception as exc:
+                failed += 1
+                print(f"ERROR  {tif_path}: {exc}", file=sys.stderr)
 
     print(
-        f"Done. created={created} skipped={skipped} failed={failed} "
+        f"Done. folders={folder_count} created={created} skipped={skipped} failed={failed} "
         f"elapsed={total_seconds:.2f}s"
     )
     return 1 if failed else 0
