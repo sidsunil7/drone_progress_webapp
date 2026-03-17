@@ -21,6 +21,7 @@ BASE_DIR = os.environ.get('BASE_DIR', os.path.dirname(os.path.dirname(os.path.ab
 BASE_LAYOUT_DIR = os.environ.get('LAYOUT_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)), "layout_data"))
 OUTPUT_DIR = os.environ.get('OUTPUT_DIR', os.path.join(BASE_DIR, "Output_Lewis"))
 LEWISTIFS_DIR = os.environ.get('LEWISTIFS_DIR', os.path.join(BASE_DIR, "Lewistifs"))
+TCPT_OBJDET_DIR = os.environ.get('TCPT_OBJDET_DIR', os.path.join(BASE_DIR, "tcpt_objdet_rawimg"))
 SONRISA_JSON_PATH = os.environ.get(
     'SONRISA_JSON_PATH',
     os.path.join(BASE_LAYOUT_DIR, "Sonrisa", "Sonrisa_construction_AI.json")
@@ -417,6 +418,7 @@ def get_zone_aliases(zone):
 
 
 def get_zone_folder_aliases(zone):
+    """Return folder name aliases for a zone. Includes Zone_N format for Flight-style folders."""
     zone = normalize_zone_code(zone)
     if not zone:
         return []
@@ -426,7 +428,10 @@ def get_zone_folder_aliases(zone):
         compact_num = str(int(number))
     except ValueError:
         compact_num = number
-    return [f"{letter}{number}", f"{letter}{compact_num}"]
+    aliases = [f"{letter}{number}", f"{letter}{compact_num}"]
+    # Flight-style folders use Zone_18, Zone_20, etc.
+    aliases.extend([f"Zone_{number}", f"Zone_{compact_num}"])
+    return list(dict.fromkeys(aliases))  # preserve order, remove dupes
 
 
 def parse_sonrisa_folder_info(folder_name):
@@ -447,7 +452,8 @@ def parse_sonrisa_folder_info(folder_name):
         if token.isdigit() and len(token) == 8:
             date_str = token
             continue
-        if "m" in token.lower() or token.lower() in ("ovrlp", "overlp"):
+        # Only treat as past-zone tokens like "74m" (altitude) or "ovrlp", not words like "Flight"
+        if (re.match(r"^\d+m$", token.lower()) or token.lower() in ("ovrlp", "overlp")):
             past_zone_section = True
             continue
         if past_zone_section:
@@ -674,6 +680,32 @@ def find_sonrisa_zone_csv(date_folder_path, zone):
                 if csv_path:
                     break
 
+    # Flight-style: zones in Zone_N subfolders (e.g. Zone_18/tracker_status_v03.csv)
+    if not csv_path and os.path.isdir(date_folder_path):
+        csv_names = ["tracker_status_v03.csv", "tracker_status_v02.csv", "tracker_status.csv"]
+        for alias in zone_folder_aliases:
+            zone_subdir = alias if alias.startswith("Zone_") else f"Zone_{alias[1:]}"
+            for name in csv_names:
+                candidate = os.path.join(date_folder_path, zone_subdir, name)
+                if os.path.exists(candidate):
+                    csv_path = candidate
+                    break
+            if csv_path:
+                break
+        if not csv_path:
+            for entry in os.listdir(date_folder_path):
+                entry_path = os.path.join(date_folder_path, entry)
+                if not os.path.isdir(entry_path):
+                    continue
+                if re.match(r"^Zone_(\d{1,2})$", entry, re.IGNORECASE):
+                    for name in csv_names:
+                        candidate = os.path.join(entry_path, name)
+                        if os.path.exists(candidate):
+                            csv_path = candidate
+                            break
+                if csv_path:
+                    break
+
     if not csv_path and os.path.isdir(date_folder_path):
         csv_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.csv')]
         for alias in get_zone_aliases(zone):
@@ -767,6 +799,43 @@ def find_sonrisa_date_folder(project_layout_dir, zone, date_str):
                 continue
             return os.path.join(project_layout_dir, item)
     return None
+
+
+def find_sonrisa_zone_tif_fallback(project_layout_dir, zone):
+    """Find zone TIFF and web JPG from another folder (e.g. G-style) when current folder (e.g. Flight-style) lacks them."""
+    zone = normalize_zone_code(zone)
+    if not zone or not project_layout_dir or not os.path.exists(project_layout_dir):
+        return None, None, None
+    zone_aliases = get_zone_aliases(zone)
+    for item in sorted(os.listdir(project_layout_dir)):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        folder_zones, _, _ = parse_sonrisa_folder_info(item.strip())
+        if zone not in folder_zones:
+            continue
+        tif_candidates = [f for f in os.listdir(item_path) if f.lower().endswith('.tif')]
+        zone_tif = None
+        for alias in zone_aliases:
+            target = f"{alias.lower()}_zone.tif"
+            for f in tif_candidates:
+                if f.lower() == target:
+                    zone_tif = f
+                    break
+            if zone_tif:
+                break
+        if not zone_tif:
+            for f in tif_candidates:
+                if f.lower().endswith('_zone.tif'):
+                    zone_tif = f
+                    break
+        if not zone_tif:
+            continue
+        tif_path = os.path.join(item_path, zone_tif)
+        web_path = get_or_create_sonrisa_web_jpg(item_path, zone_tif, max_dimension=4000)
+        if os.path.exists(tif_path):
+            return tif_path, zone_tif, web_path
+    return None, None, None
 
 
 def get_display_dimensions(width, height, max_size=2000):
@@ -958,6 +1027,9 @@ def load_tracker_info(csv_path):
        'pile_stage', 'torque_tube_stage', 'module_rails_stage', 'solar_panel_stage'.
     3) Installation format with columns:
        'pile_installation', 'lower_journal_installation', ..., 'solar_module_installation'.
+
+    When format 2 or 3 is used (CSV lacks Current_stage and Status), the computed values
+    are persisted back to the CSV so table, charts, and settings tabs can use them.
     """
     tracker_info = {}
     if not csv_path or not os.path.exists(csv_path):
@@ -965,56 +1037,85 @@ def load_tracker_info(csv_path):
 
     with open(csv_path, 'r', newline='') as csvfile:
         reader = csv.DictReader(csvfile)
-        fieldnames = reader.fieldnames or []
+        fieldnames = list(reader.fieldnames or [])
+        rows = list(reader)
 
-        has_current_cols = "Current_stage" in fieldnames and "Status" in fieldnames
-        has_per_stage_cols = (
-            "pile_stage" in fieldnames
-            and "torque_tube_stage" in fieldnames
-            and "module_rails_stage" in fieldnames
-            and "solar_panel_stage" in fieldnames
-        )
-        has_installation_cols = (
-            "pile_installation" in fieldnames
-            and "torque_tube_installation" in fieldnames
-            and "module_rail_installation" in fieldnames
-            and "solar_module_installation" in fieldnames
-        )
+    has_current_cols = "Current_stage" in fieldnames and "Status" in fieldnames
+    has_per_stage_cols = (
+        "pile_stage" in fieldnames
+        and "torque_tube_stage" in fieldnames
+        and "module_rails_stage" in fieldnames
+        and "solar_panel_stage" in fieldnames
+    )
+    has_installation_cols = (
+        "pile_installation" in fieldnames
+        and "torque_tube_installation" in fieldnames
+        and "module_rail_installation" in fieldnames
+        and "solar_module_installation" in fieldnames
+    )
 
-        for row in reader:
-            tracker_id = (
-                row.get('Tracker ID')
-                or row.get('tracker_id')
-                or row.get('trackerID')
-                or ''
-            ).strip()
-            if not tracker_id:
-                continue
+    need_persist = False
+    rows_to_write = []
 
-            if has_current_cols:
+    for row in rows:
+        tracker_id = (
+            row.get('Tracker ID')
+            or row.get('tracker_id')
+            or row.get('trackerID')
+            or ''
+        ).strip()
+
+        if has_current_cols:
+            if tracker_id:
                 stage = (row.get('Current_stage') or '').strip()
                 status = (row.get('Status') or '').strip()
-                tracker_info[tracker_id] = {
-                    'stage': stage,
-                    'status': status,
-                }
-            elif has_per_stage_cols:
+                tracker_info[tracker_id] = {'stage': stage, 'status': status}
+            rows_to_write.append((row, None, None))
+        elif has_per_stage_cols:
+            if tracker_id:
                 stage, status = compute_current_stage_from_row(row)
-                tracker_info[tracker_id] = {
-                    'stage': stage,
-                    'status': status,
-                }
-            elif has_installation_cols:
-                stage, status = compute_current_stage_from_installation_row(row)
-                tracker_info[tracker_id] = {
-                    'stage': stage,
-                    'status': status,
-                }
+                tracker_info[tracker_id] = {'stage': stage, 'status': status}
+                need_persist = True
+                rows_to_write.append((row, stage, status))
             else:
-                # Unknown CSV format; skip gracefully
-                continue
+                rows_to_write.append((row, None, None))
+        elif has_installation_cols:
+            if tracker_id:
+                stage, status = compute_current_stage_from_installation_row(row)
+                tracker_info[tracker_id] = {'stage': stage, 'status': status}
+                need_persist = True
+                rows_to_write.append((row, stage, status))
+            else:
+                rows_to_write.append((row, None, None))
+        else:
+            rows_to_write.append((row, None, None))
+
+    # Persist Current_stage and Status to CSV when computed from per-stage or installation columns
+    if need_persist and rows_to_write:
+        _persist_current_stage_to_csv(csv_path, fieldnames, rows_to_write)
 
     return tracker_info
+
+
+def _persist_current_stage_to_csv(csv_path, fieldnames, rows_with_computed):
+    """Write CSV with Current_stage and Status columns added. Preserves existing columns."""
+    if "Current_stage" not in fieldnames:
+        fieldnames = list(fieldnames) + ["Current_stage"]
+    if "Status" not in fieldnames:
+        fieldnames = list(fieldnames) + ["Status"]
+
+    try:
+        with open(csv_path, 'w', newline='') as csvfile:
+            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
+            writer.writeheader()
+            for row, stage, status in rows_with_computed:
+                if stage is not None and status is not None:
+                    row = dict(row)
+                    row["Current_stage"] = stage
+                    row["Status"] = status
+                writer.writerow(row)
+    except Exception as e:
+        print(f"Warning: could not persist Current_stage/Status to {csv_path}: {e}")
 
 def tif_to_base64_uncached(tif_path, max_size=2000):
     """Convert TIFF to base64 PNG for web display"""
@@ -1091,6 +1192,29 @@ def tif_to_base64(tif_path, max_size=2000):
     except OSError:
         return None
     return tif_to_base64_cached(tif_path, max_size, tif_sig)
+
+
+def image_to_base64(path, max_size=2000):
+    """Convert image (PNG/JPG/TIFF) to base64 PNG for web display."""
+    if not path or not os.path.exists(path):
+        return None
+    ext = os.path.splitext(path)[1].lower()
+    if ext in ('.tif', '.tiff'):
+        return tif_to_base64(path, max_size)
+    if ext in ('.png', '.jpg', '.jpeg'):
+        try:
+            with Image.open(path) as img:
+                img = img.convert('RGB')
+                if max(img.width, img.height) > max_size:
+                    ratio = max_size / max(img.width, img.height)
+                    img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.LANCZOS)
+                buffer = BytesIO()
+                img.save(buffer, format='PNG')
+                return base64.b64encode(buffer.getvalue()).decode('utf-8')
+        except Exception as e:
+            print(f"Error converting image {path}: {e}")
+            return None
+    return None
 
 
 @lru_cache(maxsize=128)
@@ -1451,6 +1575,7 @@ def get_layout_data(date_str):
     if is_zone_project:
         tif_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.tif')]
         zone_tif = None
+        web_path = None
         zone_aliases = get_zone_aliases(zone)
         for alias in zone_aliases:
             target = f"{alias.lower()}_zone.tif"
@@ -1468,8 +1593,16 @@ def get_layout_data(date_str):
         if not zone_tif and tif_candidates:
             zone_tif = tif_candidates[0]
         if not zone_tif:
-            return jsonify({'error': 'Zone TIFF not found'}), 404
-        tif_path = os.path.join(date_folder_path, zone_tif)
+            # Flight-style folders lack zone TIFF; fall back to G-style folder
+            fallback_tif_path, fallback_zone_tif, fallback_web_path = find_sonrisa_zone_tif_fallback(project_layout_dir, zone)
+            if fallback_tif_path and fallback_zone_tif:
+                zone_tif = fallback_zone_tif
+                tif_path = fallback_tif_path
+                web_path = fallback_web_path
+            else:
+                return jsonify({'error': 'Zone TIFF not found'}), 404
+        else:
+            tif_path = os.path.join(date_folder_path, zone_tif)
 
         # Load JSON and CSV
         json_path = get_zone_json_path(project_layout_dir)
@@ -1486,7 +1619,10 @@ def get_layout_data(date_str):
         json_sig = get_file_signature(json_path)
         csv_sig = optional_file_signature(csv_path)
 
-        web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
+        if not zone_tif or 'web_path' not in dir() or not web_path:
+            web_path = get_or_create_sonrisa_web_jpg(
+                os.path.dirname(tif_path), zone_tif, max_dimension=4000
+            )
         web_sig = optional_file_signature(web_path)
         layout_etag = build_etag(
             "layout",
@@ -2002,7 +2138,12 @@ def get_zone_image(zone, date_str):
     if not zone_tif and tif_candidates:
         zone_tif = tif_candidates[0]
     if not zone_tif:
-        return jsonify({'error': 'Zone TIFF not found'}), 404
+        fallback_tif_path, fallback_zone_tif, fallback_web_path = find_sonrisa_zone_tif_fallback(project_layout_dir, zone)
+        if fallback_tif_path and fallback_zone_tif:
+            date_folder_path = os.path.dirname(fallback_tif_path)
+            zone_tif = fallback_zone_tif
+        else:
+            return jsonify({'error': 'Zone TIFF not found'}), 404
     web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
     if web_path and os.path.exists(web_path):
         web_sig = get_file_signature(web_path)
@@ -2133,9 +2274,23 @@ def get_tracker_image(date_str, tracker_id):
             os.path.join(date_folder_path, f"{tracker_id}_boundary_spine.tif"),
             os.path.join(date_folder_path, f"{tracker_id}_boundary.tif"),
         ])
+        # Flight-style: Zone_N/extracted_tracker_images/*.png and tcpt_objdet_rawimg/results/Flight_*/Zone_N/extracted_tracker_images/*.png
+        zone_num = zone[1:]
+        for alias in zone_folder_aliases:
+            zone_subdir = alias if alias.startswith("Zone_") else f"Zone_{alias[1:]}"
+            tracker_paths.extend([
+                os.path.join(date_folder_path, zone_subdir, "extracted_tracker_images", f"{tracker_id}.png"),
+                os.path.join(date_folder_path, zone_subdir, "extracted_tracker_images", tracker_filename),
+            ])
+        date_folder_name = os.path.basename(date_folder_path)
+        if date_folder_name.startswith("Flight_") and TCPT_OBJDET_DIR and os.path.isdir(TCPT_OBJDET_DIR):
+            flight_base = re.sub(r"_\d{8}(_.*)?$", "", date_folder_name)
+            tracker_paths.extend([
+                os.path.join(TCPT_OBJDET_DIR, "results", flight_base, f"Zone_{zone_num}", "extracted_tracker_images", f"{tracker_id}.png"),
+            ])
         for path in tracker_paths:
             if os.path.exists(path):
-                base64_img = tif_to_base64(path)
+                base64_img = tif_to_base64(path) if path.lower().endswith(('.tif', '.tiff')) else image_to_base64(path)
                 if base64_img:
                     log_timing("get_tracker_image", request_start, date=date_str, tracker=tracker_id, path=path)
                     return jsonify({'image': f'data:image/png;base64,{base64_img}'})
@@ -2238,8 +2393,15 @@ def handle_click():
             if not zone_tif and tif_candidates:
                 zone_tif = tif_candidates[0]
             if not zone_tif:
-                return jsonify({'error': 'TIFF file not found'}), 404
-            tif_path = os.path.join(date_folder_path, zone_tif)
+                fallback_tif_path, fallback_zone_tif, _ = find_sonrisa_zone_tif_fallback(project_layout_dir, zone)
+                if fallback_tif_path and fallback_zone_tif:
+                    date_folder_path = os.path.dirname(fallback_tif_path)
+                    zone_tif = fallback_zone_tif
+                    tif_path = fallback_tif_path
+                else:
+                    return jsonify({'error': 'TIFF file not found'}), 404
+            else:
+                tif_path = os.path.join(date_folder_path, zone_tif)
         else:
             tif_path = os.path.join(date_folder_path, f"{date_match}.tif")
             if not os.path.exists(tif_path):

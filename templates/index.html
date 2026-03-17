@@ -227,6 +227,12 @@
             border: 1px solid #00FF00;
         }
         
+        .missing-badge {
+            background: rgba(255, 0, 0, 0.3);
+            color: #C62828;
+            border: 1px solid #FF0000;
+        }
+        
         .stage-badge {
             display: inline-block;
             padding: 4px 12px;
@@ -971,6 +977,9 @@
         let totalTrackers = 0;
         let selectedStage = null;
         let selectedStatus = null;
+
+        // Client-side: trackers we've discovered have missing images (from failed fetches)
+        let discoveredMissingTrackers = new Set();
 
         // Site-level stage counts (zone picker view, summed across all zones)
         let siteStageCounts = {};
@@ -2602,6 +2611,7 @@
                 }
                 
                 layoutData = data;
+                discoveredMissingTrackers.clear();
                 
                 // Preserve stage selection when switching dates
                 if (!preserveState) {
@@ -3224,7 +3234,6 @@
                 if (info && boundary) {
                     const canvasCoords = latLonToCanvas(boundary, layoutData);
                     if (canvasCoords) {
-                        // Draw selected tracker in yellow (always visible)
                         drawStageRectangle(ctx, canvasCoords, info.stage, true);
                         // Draw status circle if overlays are enabled
                         if (overlaysEnabled) {
@@ -3285,7 +3294,6 @@
                     return;
                 }
                 
-                // Draw rectangle for stage (not selected, so use stage color)
                 drawStageRectangle(ctx, canvasCoords, info.stage, false);
                 
                 // Draw circle for status (positioned above the scaled rectangle)
@@ -3399,28 +3407,27 @@
             }
         }
         
-        function updateTrackerPreview(trackerId, imageSrc, info, errorMessage) {
+        function updateTrackerPreview(trackerId, imageSrc, info, errorMessage, isMissing = false) {
             const previewDiv = document.getElementById('trackerPreview');
             if (!previewDiv) return;
             
-            if (errorMessage) {
-                previewDiv.innerHTML = `
-                    <div class="tracker-preview-header">
-                            <h3>${trackerId}</h3>
-                        ${renderPreviewMeta(info)}
-                        </div>
-                    <p class="tracker-preview-placeholder">${errorMessage}</p>
-                `;
-                return;
-            }
+            const showMissing = isMissing || (errorMessage && (errorMessage.includes('not found') || errorMessage.includes('Tracker image not found')));
             
-            if (!imageSrc) {
+            if (errorMessage || !imageSrc) {
+                const missingMsg = showMissing
+                    ? 'Image missing — no tracker image available for this date.'
+                    : (errorMessage || `No image available for ${trackerId}.`);
                 previewDiv.innerHTML = `
                     <div class="tracker-preview-header">
-                            <h3>${trackerId}</h3>
-                        ${renderPreviewMeta(info)}
+                        <h3>${trackerId}</h3>
+                        ${renderPreviewMeta(info, showMissing)}
                     </div>
-                    <p class="tracker-preview-placeholder">No image available for ${trackerId}.</p>`;
+                    <p class="tracker-preview-placeholder tracker-missing-msg">${missingMsg}</p>
+                `;
+                if (showMissing) {
+                    const msgEl = previewDiv.querySelector('.tracker-missing-msg');
+                    if (msgEl) msgEl.style.color = '#c00';
+                }
                 return;
             }
             
@@ -3445,11 +3452,12 @@
             applyTrackerZoom();
         }
         
-        function renderPreviewMeta(info = {}) {
+        function renderPreviewMeta(info = {}, isMissing = false) {
             const stageClass = getStageClass(info.stage);
             const statusClass = getStatusClass(info.status);
             const stageLabel = formatStageLabel((info.stage || '').toLowerCase().replace(/\s+/g, '_')) || info.stage || 'Unknown';
             const statusLabel = formatStatusLabel((info.status || '').toLowerCase().replace(/\s+/g, '_')) || info.status || 'Unknown';
+            const missingBadge = isMissing ? '<div class="meta-item"><span class="status-badge missing-badge">Missing</span></div>' : '';
             return `
                 <div class="tracker-preview-meta">
                     <div class="meta-item">
@@ -3458,6 +3466,7 @@
                     <div class="meta-item">
                         <span class="status-badge ${statusClass}">${statusLabel}</span>
                     </div>
+                    ${missingBadge}
                 </div>
             `;
         }
@@ -3719,6 +3728,12 @@
             // Redraw overlays to show highlight
             drawOverlays();
             
+            const isKnownMissing = (layoutData.missing_tracker_ids || []).includes(trackerId);
+            if (isKnownMissing) {
+                updateTrackerPreview(trackerId, null, info, null, true);
+                return;
+            }
+            
             showPreviewLoading(trackerId, info);
             
             // Load tracker image
@@ -3740,18 +3755,20 @@
                 
                 if (data.error) {
                     console.error('displayTracker: Error from server', data.error);
-                    updateTrackerPreview(trackerId, null, info, `Unable to load image for ${trackerId}: ${data.error}`);
+                    discoveredMissingTrackers.add(trackerId);
+                    drawOverlays();
+                    updateTrackerPreview(trackerId, null, info, `Unable to load image for ${trackerId}: ${data.error}`, true);
                 } else if (data.image) {
                     console.log('displayTracker: Image loaded successfully');
                     setLimitedCacheEntry(trackerImageCache, trackerCacheKey, data.image, 400);
                     updateTrackerPreview(trackerId, data.image, info);
                 } else {
                     console.error('displayTracker: No image in response', data);
-                    updateTrackerPreview(trackerId, null, info, `No image data received for ${trackerId}.`);
+                    updateTrackerPreview(trackerId, null, info, `No image data received for ${trackerId}.`, true);
                 }
             } catch (error) {
                 console.error('displayTracker: Exception', error);
-                updateTrackerPreview(trackerId, null, info, `Error loading image for ${trackerId}: ${error.message}`);
+                updateTrackerPreview(trackerId, null, info, `Error loading image for ${trackerId}: ${error.message}`, true);
             }
         }
         
