@@ -43,12 +43,14 @@
             flex: 1;
             padding: 20px;
             padding-bottom: 0;
-            overflow: auto;
+            overflow: hidden;
             background: white;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            justify-content: flex-start;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(320px, 36%);
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
+            column-gap: 16px;
+            row-gap: 8px;
+            align-items: stretch;
             min-height: 0;
             position: relative;
         }
@@ -64,14 +66,21 @@
         
         .view-tabs {
             display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
+            gap: 6px;
+            margin-bottom: 4px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            width: fit-content;
+            max-width: 100%;
+            grid-column: 1;
+            grid-row: 1;
+            align-self: start;
         }
 
         .selection-banner {
             display: none;
             align-self: flex-start;
-            margin: 8px 0 12px 2px;
+            margin: 0 0 8px 2px;
             padding: 6px 10px;
             border-radius: 8px;
             background: #eef6fa;
@@ -81,6 +90,9 @@
             font-weight: 600;
             width: fit-content;
             max-width: 100%;
+            flex-shrink: 0;
+            grid-column: 1;
+            grid-row: 2;
         }
 
         .selection-banner-line + .selection-banner-line {
@@ -88,11 +100,12 @@
         }
         
         .view-tab {
-            padding: 6px 12px;
+            padding: 3px 8px;
             border-radius: 16px;
             border: 1px solid #ccc;
             background: #f5f5f5;
-            font-size: 13px;
+            font-size: 11px;
+            line-height: 1.2;
             cursor: pointer;
             color: #014059;
             transition: all 0.15s ease;
@@ -109,10 +122,37 @@
             height: 100%;
             display: none;
             flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
         
         .view-panel.active {
             display: flex;
+        }
+
+        #mapView.view-panel.active {
+            display: contents;
+        }
+
+        #tableView.view-panel.active,
+        #chartsView.view-panel.active,
+        #settingsView.view-panel.active {
+            grid-column: 1 / -1;
+            grid-row: 3 / 5;
+        }
+
+        #chartsView.view-panel.active {
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .charts-scroll-content {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: max-content;
+            padding-right: 4px;
         }
         
         #layoutCanvas {
@@ -134,10 +174,11 @@
             flex: 1;
             min-height: 0;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             position: relative;
             overflow: hidden;
+            order: 2;
         }
         
         .canvas-wrapper {
@@ -148,21 +189,23 @@
         }
         
         .zoom-controls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 100;
+            position: static;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
+            order: 1;
+            flex: 0 0 auto;
+            align-self: flex-end;
+            width: 60px;
+            margin: 0 0 10px;
             background: white;
-            padding: 8px;
+            padding: 6px;
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
         
         .zoom-btn {
-            width: 36px;
+            width: 100%;
             height: 36px;
             border: 1px solid #ddd;
             background: white;
@@ -187,9 +230,13 @@
         }
         
         .zoom-reset {
-            font-size: 14px;
-            padding: 4px 8px;
-            height: auto;
+            width: 100%;
+            min-width: 0;
+            height: 36px;
+            padding: 0 8px;
+            font-size: 13px;
+            line-height: 1;
+            white-space: nowrap;
         }
         
         .loading {
@@ -306,8 +353,8 @@
             bottom: auto;
             left: 0;
             right: auto;
-            margin: 8px 0 0;
-            padding: 4px 15px;
+            margin: 0;
+            padding: 6px 12px;
             background: transparent;
             border-radius: 0;
             width: 100%;
@@ -317,6 +364,9 @@
             align-items: stretch;
             min-width: 0;
             z-index: 10;
+            flex-shrink: 0;
+            grid-column: 1 / -1;
+            grid-row: 4;
         }
         
         .timeline-container label {
@@ -450,32 +500,27 @@
         }
         
         .layout-wrapper {
-            display: flex;
-            gap: 20px;
-            width: 100%;
-            flex: 1;
-            min-height: 0;
-            align-items: flex-start;
-            padding-bottom: 80px; /* Extra space for timeline below the layout */
-            flex-wrap: nowrap;
+            display: contents;
         }
-        
         .layout-view {
-            flex: 1;
+            grid-column: 1;
+            grid-row: 3;
             display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             justify-content: flex-start;
             min-width: 0;
-            height: 100%;
             min-height: 0;
+            overflow: hidden;
+            position: relative;
         }
         
         .tracker-preview {
-            flex: 0 0 320px;
-            width: 320px;
+            grid-column: 2;
+            grid-row: 1 / 4;
+            width: auto;
             min-width: 280px;
-            max-width: 360px;
+            max-width: none;
             background: #ffffff;
             border: 1px solid #e0e0e0;
             border-radius: 8px;
@@ -483,10 +528,13 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
             display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             justify-content: flex-start;
-            height: calc(100vh - 140px);
+            align-self: stretch;
+            min-height: 0;
+            max-height: none;
             overflow-y: auto;
+            margin-top: 0;
         }
         
         .tracker-zoom-controls {
@@ -520,6 +568,15 @@
 
         .tracker-zoom-btn:active {
             background: #e0e0e0;
+        }
+
+        #trackerZoomResetBtn {
+            width: auto;
+            min-width: 52px;
+            padding: 0 8px;
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
         }
 
         .tracker-preview-image-wrapper {
@@ -735,7 +792,9 @@
             border: 1px solid #e0e0e0;
             border-radius: 8px;
             padding: 16px;
-            margin-bottom: 16px;
+            margin: 0;
+            grid-column: 1 / -1;
+            grid-row: 3;
         }
 
         .zone-picker h2 {
@@ -871,7 +930,7 @@
 
             <!-- Charts View -->
             <div id="chartsView" class="view-panel">
-                <div style="flex:1; display:flex; flex-direction:column; gap:12px;">
+                <div class="charts-scroll-content">
                     <div style="background:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; display:flex; flex-direction:column; gap:6px;">
                         <h2 style="font-size:16px; color:#014059; margin-bottom:4px;">Stage Distribution (Pie Chart)</h2>
                         <p style="font-size:12px; color:#666; margin-bottom:4px;">
@@ -1280,7 +1339,7 @@
                 // Setup timeline slider (show if more than one date)
                 const timelineContainer = document.getElementById('timelineContainer');
                 if (availableDates.length > 1) {
-                    timelineContainer.style.display = 'block';
+                    timelineContainer.style.display = '';
                     
                     const slider = document.getElementById('timelineSlider');
                     slider.max = availableDates.length - 1;
@@ -1376,7 +1435,7 @@
                     lastZonePickerDateId = zoneMapDates[0].date;
                     const timelineContainer = document.getElementById('timelineContainer');
                     if (timelineContainer) {
-                        timelineContainer.style.display = 'block';
+                        timelineContainer.style.display = '';
                         const slider = document.getElementById('timelineSlider');
                         slider.max = availableDates.length - 1;
                         slider.value = 0;
@@ -1459,7 +1518,7 @@
             const siteOverviewSection = document.getElementById('siteOverviewSection');
             const filterSection = document.getElementById('filterSection');
             if (zonePicker) zonePicker.style.display = 'none';
-            if (layoutWrapper) layoutWrapper.style.display = 'flex';
+            if (layoutWrapper) layoutWrapper.style.display = '';
             if (siteOverviewSection) siteOverviewSection.style.display = 'none';
             if (filterSection) filterSection.style.display = 'block';
             isZonePickerActive = false;
@@ -1484,7 +1543,7 @@
 
             const timelineContainer = document.getElementById('timelineContainer');
             if (availableDates.length > 1) {
-                timelineContainer.style.display = 'block';
+                timelineContainer.style.display = '';
                 const slider = document.getElementById('timelineSlider');
                 slider.max = availableDates.length - 1;
                 const preferredZoneDateIndex = Math.max(0, availableDates.findIndex(d => d.date === preferredZoneDateId));
@@ -1556,7 +1615,7 @@
             if (zonePicker) zonePicker.style.display = 'block';
             if (layoutWrapper) layoutWrapper.style.display = 'none';
             if (timelineContainer) {
-                timelineContainer.style.display = availableDates.length > 1 ? 'block' : 'none';
+                timelineContainer.style.display = availableDates.length > 1 ? '' : 'none';
                 if (availableDates.length > 0) {
                     const slider = document.getElementById('timelineSlider');
                     const restoredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
@@ -2836,12 +2895,9 @@
                         if (preserveState && canvas && canvasWrapper && ctx) {
                             // Just update the canvas image and redraw
                             // Need to recalculate canvas size if image dimensions changed
-                            const timelineContainer = document.getElementById('timelineContainer');
-                            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
-                                ? timelineContainer.offsetHeight : 0;
-                            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
-                            const containerWidth = document.getElementById('layoutContainer').clientWidth - 40;
-                            const containerHeight = Math.max(availableHeight, 400);
+                            const container = document.getElementById('layoutContainer');
+                            const containerWidth = Math.max(container.clientWidth - 16, 320);
+                            const containerHeight = Math.max(container.clientHeight - 16, 400);
                             
                             const imgAspect = img.width / img.height;
                             const containerAspect = containerWidth / containerHeight;
@@ -2941,16 +2997,10 @@
             canvas = document.createElement('canvas');
             ctx = canvas.getContext('2d');
             
-            // Calculate scale to fill available space better
-            const timelineContainer = document.getElementById('timelineContainer');
-            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
-                ? timelineContainer.offsetHeight : 0;
-            
-            // Get available space - use viewport height minus header, padding, and timeline
-            // Header: 80px, Main-view padding: 20px (top only, bottom is 0), Timeline: timelineHeight
-            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
-            const containerWidth = container.clientWidth - 40;
-            const containerHeight = Math.max(availableHeight, 400); // Minimum 400px height
+            // Size the canvas from the actual panel bounds so it fills the
+            // remaining layout area without relying on viewport guesses.
+            const containerWidth = Math.max(container.clientWidth - 16, 320);
+            const containerHeight = Math.max(container.clientHeight - 16, 400);
             
             // Calculate aspect ratios
             const imgAspect = img.width / img.height;
