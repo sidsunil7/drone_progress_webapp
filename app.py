@@ -11,6 +11,7 @@ import base64
 import re
 import time
 import hashlib
+from datetime import datetime, timezone
 from functools import lru_cache
 
 app = Flask(__name__)
@@ -39,6 +40,12 @@ DEFAULT_MAX_AGE = 3600
 WEB_IMAGE_MAX_DIMENSION = int(os.environ.get("WEB_IMAGE_MAX_DIMENSION", "3000"))
 WEBP_QUALITY = int(os.environ.get("WEBP_QUALITY", "72"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
+APP_DATA_DIRNAME = "_app_data"
+PROJECT_SETTINGS_FILENAME = "project_settings.json"
+DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5]
+DEFAULT_HOURS_PER_DAY = 10
+VALID_PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$")
+WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
 
 def log_timing(label, start_time, **context):
@@ -86,6 +93,116 @@ def optional_file_signature(file_path):
     if not file_path or not os.path.exists(file_path):
         return (0, 0)
     return get_file_signature(file_path)
+
+
+def utc_now_iso():
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def normalize_project_name_input(raw_name):
+    if raw_name is None:
+        return None
+    name = str(raw_name).strip()
+    if not name or not VALID_PROJECT_NAME_PATTERN.fullmatch(name):
+        return None
+    return name
+
+
+def parse_optional_iso_date(value):
+    if value in (None, ""):
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        return None
+
+
+def safe_float(value):
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def safe_int(value):
+    if value in (None, ""):
+        return None
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def normalize_working_days(values):
+    if values is None:
+        return DEFAULT_WORKING_DAYS[:]
+    if not isinstance(values, list):
+        raise ValueError("working_days must be a list")
+    normalized = []
+    for value in values:
+        day = safe_int(value)
+        if day is None or day < 0 or day > 6:
+            raise ValueError("working_days must contain integers from 0 to 6")
+        if day not in normalized:
+            normalized.append(day)
+    if not normalized:
+        raise ValueError("At least one working day is required")
+    return sorted(normalized)
+
+
+def working_day_labels(days):
+    return [WEEKDAY_LABELS[day] for day in days if 0 <= day < len(WEEKDAY_LABELS)]
+
+
+def read_json_file(file_path, default=None):
+    if not file_path or not os.path.exists(file_path):
+        return {} if default is None else default
+    with open(file_path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def atomic_write_json(file_path, payload):
+    parent_dir = os.path.dirname(file_path)
+    os.makedirs(parent_dir, exist_ok=True)
+    tmp_path = os.path.join(parent_dir, f".{os.path.basename(file_path)}.{os.getpid()}.{time.time_ns()}.tmp")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, file_path)
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
+@lru_cache(maxsize=64)
+def derive_project_tracker_defaults_cached(json_path, json_sig):
+    if not json_path or not os.path.exists(json_path):
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": None}
+
+    try:
+        data = read_json_file(json_path, default={})
+    except Exception:
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
+
+    for table in data.get("tableDetails", []):
+        module_wattage = safe_float(table.get("moduleWattage"))
+        string_size = safe_float(table.get("stringSize"))
+        string_qty = safe_float(table.get("stringQty"))
+        if module_wattage and string_size and string_qty:
+            modules_per_tracker = int(round(string_size * string_qty))
+            mw_per_tracker = round((module_wattage * string_size * string_qty) / 1_000_000, 6)
+            return {
+                "mw_per_tracker": mw_per_tracker,
+                "modules_per_tracker": modules_per_tracker,
+                "project_json_path": os.path.basename(json_path),
+            }
+
+    return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
 
 
 @lru_cache(maxsize=128)
@@ -533,6 +650,208 @@ def get_available_projects():
         name for name in os.listdir(BASE_LAYOUT_DIR)
         if os.path.isdir(os.path.join(BASE_LAYOUT_DIR, name))
     ])
+
+
+def get_project_app_data_dir(project_layout_dir):
+    return os.path.join(project_layout_dir, APP_DATA_DIRNAME)
+
+
+def get_project_settings_path(project_layout_dir):
+    return os.path.join(get_project_app_data_dir(project_layout_dir), PROJECT_SETTINGS_FILENAME)
+
+
+def ensure_project_scaffold(project_layout_dir):
+    os.makedirs(get_project_app_data_dir(project_layout_dir), exist_ok=True)
+
+
+def find_project_metadata_json(project_layout_dir, project_name):
+    if not project_layout_dir or not os.path.isdir(project_layout_dir):
+        return None
+    preferred = os.path.join(project_layout_dir, f"{project_name}-NY_construction_AI_corrected_1.json")
+    if os.path.exists(preferred):
+        return preferred
+    for fname in sorted(os.listdir(project_layout_dir)):
+        lower = fname.lower()
+        if lower.endswith("_construction_ai.json") or lower.endswith("_construction_ai_corrected_1.json"):
+            return os.path.join(project_layout_dir, fname)
+    for fname in sorted(os.listdir(project_layout_dir)):
+        if fname.lower().endswith(".json"):
+            return os.path.join(project_layout_dir, fname)
+    return None
+
+
+def get_project_date_entries(project):
+    project_layout_dir = get_layout_dir(project)
+    if not project_layout_dir or not os.path.isdir(project_layout_dir):
+        return []
+    if project_has_zones(project):
+        dir_sig = _get_dir_signature(project_layout_dir)
+        return list(_all_dates_cached(project_layout_dir, dir_sig))
+
+    dates = []
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if os.path.isdir(item_path) and item.startswith(project):
+            date_str = item.replace(project, "")
+            if date_str.isdigit() and len(date_str) == 8:
+                dates.append({
+                    "date": date_str,
+                    "folder": item,
+                    "display": f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}",
+                })
+    dates.sort(key=lambda item: item["date"])
+    return dates
+
+
+def get_project_date_bounds(project):
+    dates = get_project_date_entries(project)
+    if not dates:
+        return None, None
+    return dates[0]["display"], dates[-1]["display"]
+
+
+def derive_project_tracker_defaults(project_layout_dir, project_name):
+    json_path = find_project_metadata_json(project_layout_dir, project_name)
+    json_sig = optional_file_signature(json_path)
+    return derive_project_tracker_defaults_cached(json_path, json_sig)
+
+
+def build_project_settings_response(project_name):
+    project_layout_dir = get_layout_dir(project_name)
+    settings_path = get_project_settings_path(project_layout_dir)
+    stored = read_json_file(settings_path, default={}) if os.path.exists(settings_path) else {}
+    derived = derive_project_tracker_defaults(project_layout_dir, project_name)
+    derived_start_date, derived_end_date = get_project_date_bounds(project_name)
+
+    working_days = stored.get("working_days", DEFAULT_WORKING_DAYS)
+    try:
+        normalized_working_days = normalize_working_days(working_days)
+    except ValueError:
+        normalized_working_days = DEFAULT_WORKING_DAYS[:]
+
+    hours_per_day = safe_float(stored.get("hours_per_day"))
+    if hours_per_day is None or hours_per_day <= 0:
+        hours_per_day = float(DEFAULT_HOURS_PER_DAY)
+
+    settings = {
+        "project_name": project_name,
+        "working_days": normalized_working_days,
+        "working_day_labels": working_day_labels(normalized_working_days),
+        "hours_per_day": hours_per_day,
+        "mw_per_tracker": (
+            derived["mw_per_tracker"]
+            if derived["mw_per_tracker"] is not None
+            else safe_float(stored.get("mw_per_tracker"))
+        ),
+        "modules_per_tracker": (
+            derived["modules_per_tracker"]
+            if derived["modules_per_tracker"] is not None
+            else safe_int(stored.get("modules_per_tracker"))
+        ),
+        "project_start_date": parse_optional_iso_date(stored.get("project_start_date")) or derived_start_date,
+        "project_end_date": parse_optional_iso_date(stored.get("project_end_date")) or derived_end_date,
+        "created_at": stored.get("created_at"),
+        "updated_at": stored.get("updated_at"),
+        "settings_exists": os.path.exists(settings_path),
+        "project_json_path": derived.get("project_json_path"),
+    }
+    return settings
+
+
+def build_project_record(project_name):
+    settings = build_project_settings_response(project_name)
+    return {
+        "name": project_name,
+        "project_start_date": settings.get("project_start_date"),
+        "project_end_date": settings.get("project_end_date"),
+        "working_days": settings.get("working_days"),
+        "working_day_labels": settings.get("working_day_labels"),
+        "hours_per_day": settings.get("hours_per_day"),
+        "mw_per_tracker": settings.get("mw_per_tracker"),
+        "modules_per_tracker": settings.get("modules_per_tracker"),
+        "settings_exists": settings.get("settings_exists"),
+        "project_json_path": settings.get("project_json_path"),
+    }
+
+
+def get_project_records():
+    return [build_project_record(project_name) for project_name in get_available_projects()]
+
+
+def validate_project_settings_payload(payload, *, require_project_name=False):
+    cleaned = {}
+    if require_project_name:
+        project_name = normalize_project_name_input(payload.get("project_name"))
+        if not project_name:
+            raise ValueError("Project name is required and may only contain letters, numbers, spaces, underscores, and hyphens.")
+        cleaned["project_name"] = project_name
+
+    cleaned["working_days"] = normalize_working_days(payload.get("working_days", DEFAULT_WORKING_DAYS))
+
+    hours_per_day = safe_float(payload.get("hours_per_day"))
+    if hours_per_day is None or hours_per_day <= 0:
+        raise ValueError("hours_per_day must be greater than 0.")
+    cleaned["hours_per_day"] = hours_per_day
+
+    project_start_date = parse_optional_iso_date(payload.get("project_start_date"))
+    project_end_date = parse_optional_iso_date(payload.get("project_end_date"))
+    if payload.get("project_start_date") not in (None, "") and not project_start_date:
+        raise ValueError("project_start_date must use YYYY-MM-DD format.")
+    if payload.get("project_end_date") not in (None, "") and not project_end_date:
+        raise ValueError("project_end_date must use YYYY-MM-DD format.")
+    if project_start_date and project_end_date and project_end_date < project_start_date:
+        raise ValueError("project_end_date must be on or after project_start_date.")
+    cleaned["project_start_date"] = project_start_date
+    cleaned["project_end_date"] = project_end_date
+
+    mw_per_tracker = safe_float(payload.get("mw_per_tracker"))
+    modules_per_tracker = safe_int(payload.get("modules_per_tracker"))
+    cleaned["mw_per_tracker"] = mw_per_tracker
+    cleaned["modules_per_tracker"] = modules_per_tracker
+    return cleaned
+
+
+def save_project_settings(project_name, payload, *, creating=False):
+    project_layout_dir = get_layout_dir(project_name)
+    if creating:
+        if os.path.exists(project_layout_dir):
+            raise FileExistsError(f"Project already exists: {project_name}")
+        os.makedirs(project_layout_dir, exist_ok=True)
+    elif not os.path.isdir(project_layout_dir):
+        raise FileNotFoundError(f"Project not found: {project_name}")
+
+    ensure_project_scaffold(project_layout_dir)
+    settings_path = get_project_settings_path(project_layout_dir)
+    existing = read_json_file(settings_path, default={}) if os.path.exists(settings_path) else {}
+    derived = derive_project_tracker_defaults(project_layout_dir, project_name)
+    now_iso = utc_now_iso()
+
+    record = {
+        "project_name": project_name,
+        "working_days": payload["working_days"],
+        "hours_per_day": payload["hours_per_day"],
+        "mw_per_tracker": (
+            derived["mw_per_tracker"]
+            if derived["mw_per_tracker"] is not None
+            else payload.get("mw_per_tracker")
+            if payload.get("mw_per_tracker") is not None
+            else existing.get("mw_per_tracker")
+        ),
+        "modules_per_tracker": (
+            derived["modules_per_tracker"]
+            if derived["modules_per_tracker"] is not None
+            else payload.get("modules_per_tracker")
+            if payload.get("modules_per_tracker") is not None
+            else existing.get("modules_per_tracker")
+        ),
+        "project_start_date": payload.get("project_start_date"),
+        "project_end_date": payload.get("project_end_date"),
+        "created_at": existing.get("created_at") or now_iso,
+        "updated_at": now_iso,
+    }
+    atomic_write_json(settings_path, record)
+    _project_has_zones_cache.pop(project_name, None)
+    return build_project_settings_response(project_name)
 
 
 def resolve_project_name(raw_project):
@@ -1434,7 +1753,7 @@ def build_date_summary_cached(csv_path, csv_sig):
 @app.route('/')
 def select_project():
     """Project selection page"""
-    projects = get_available_projects()
+    projects = get_project_records()
     return render_template('select_project.html', projects=projects)
 
 
@@ -1443,13 +1762,68 @@ def project_home(project):
     """Set project selection and render the main app"""
     resolved_project = resolve_project_name(project)
     if not resolved_project:
-        return render_template('select_project.html', projects=get_available_projects()), 404
+        return render_template('select_project.html', projects=get_project_records()), 404
     has_zones = project_has_zones(resolved_project)
     response = make_response(render_template(
         'index.html', project=resolved_project, has_zones=has_zones
     ))
     response.set_cookie('project', resolved_project, samesite='Lax')
     return response
+
+
+@app.route('/api/projects', methods=['GET', 'POST'])
+def api_projects():
+    if request.method == 'GET':
+        return jsonify({'projects': get_project_records()})
+
+    payload = request.get_json(silent=True) or {}
+    try:
+        cleaned = validate_project_settings_payload(payload, require_project_name=True)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    project_name = cleaned.pop("project_name")
+    if resolve_project_name(project_name):
+        return jsonify({'error': f'Project already exists: {project_name}'}), 409
+
+    try:
+        settings = save_project_settings(project_name, cleaned, creating=True)
+    except FileExistsError as exc:
+        return jsonify({'error': str(exc)}), 409
+    except OSError as exc:
+        return jsonify({'error': f'Unable to create project: {exc}'}), 500
+
+    return jsonify({
+        'project': build_project_record(project_name),
+        'settings': settings,
+    }), 201
+
+
+@app.route('/api/project_settings', methods=['GET', 'PUT'])
+def api_project_settings():
+    project_param = request.args.get('project')
+    if request.method == 'GET':
+        project_name = resolve_project_name(project_param) if project_param else get_project_from_request()
+        if not project_name:
+            return jsonify({'error': 'Project not found'}), 404
+        return jsonify(build_project_settings_response(project_name))
+
+    payload = request.get_json(silent=True) or {}
+    project_name = resolve_project_name(project_param or payload.get('project_name'))
+    if not project_name:
+        return jsonify({'error': 'Project not found'}), 404
+
+    try:
+        cleaned = validate_project_settings_payload(payload)
+        settings = save_project_settings(project_name, cleaned, creating=False)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except OSError as exc:
+        return jsonify({'error': f'Unable to save project settings: {exc}'}), 500
+
+    return jsonify(settings)
 
 
 @app.route('/api/date_summary/<date_str>')

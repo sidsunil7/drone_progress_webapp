@@ -67,6 +67,25 @@
             gap: 8px;
             margin-bottom: 12px;
         }
+
+        .selection-banner {
+            display: none;
+            align-self: flex-start;
+            margin: 8px 0 12px 2px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            background: #eef6fa;
+            border: 1px solid #cfe2ec;
+            color: #014059;
+            font-size: 13px;
+            font-weight: 600;
+            width: fit-content;
+            max-width: 100%;
+        }
+
+        .selection-banner-line + .selection-banner-line {
+            margin-top: 2px;
+        }
         
         .view-tab {
             padding: 6px 12px;
@@ -283,11 +302,11 @@
         }
         
         .timeline-container {
-            position: absolute;
-            bottom: -12px; /* Place just below the layout image */
+            position: relative;
+            bottom: auto;
             left: 0;
-            right: 0;
-            margin: 0;
+            right: auto;
+            margin: 8px 0 0;
             padding: 4px 15px;
             background: transparent;
             border-radius: 0;
@@ -342,13 +361,23 @@
             font-size: 10px;
             color: #666;
         }
-        
-        .timeline-current {
-            text-align: center;
+
+        .timeline-current-row {
+            position: relative;
+            height: 16px;
             margin-top: 3px;
+        }
+
+        .timeline-current {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: translateX(-50%);
             font-weight: bold;
             color: #014059;
             font-size: 11px;
+            white-space: nowrap;
+            pointer-events: none;
         }
 
         .timeline-dots {
@@ -760,6 +789,10 @@
                 <button class="view-tab" data-view="charts">Charts</button>
                 <button class="view-tab" data-view="settings">Settings</button>
             </div>
+            <div class="selection-banner" id="selectedZoneBanner">
+                <div class="selection-banner-line" id="selectedZoneValue"></div>
+                <div class="selection-banner-line" id="selectedDateValue"></div>
+            </div>
 
             <!-- Map View -->
             <div id="mapView" class="view-panel active">
@@ -794,7 +827,9 @@
                         <span id="timelineStart"></span>
                         <span id="timelineEnd"></span>
                     </div>
-                    <div class="timeline-current" id="timelineCurrent"></div>
+                    <div class="timeline-current-row">
+                        <div class="timeline-current" id="timelineCurrent"></div>
+                    </div>
                     <div class="timeline-dots" id="timelineDots"></div>
                 </div>
             </div>
@@ -864,19 +899,25 @@
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
                     <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Manpower Configuration</h2>
                     <p style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Enter the total number of people working on site for each day. Edits here affect charts for this session only.
+                        Enter the total number of people working on site for each day. Project defaults are loaded from project settings; edits here affect charts for this session only.
                     </p>
                     <div style="margin-bottom:10px; padding:8px; background:#f9f9f9; border-radius:6px; border:1px solid #e0e0e0;">
                         <div style="font-size:13px; color:#014059; font-weight:600; margin-bottom:4px;">Global Parameters</div>
                         <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#333;">
                             <label>
-                                Module wattage (W):
-                                <input type="number" id="mwPerTrackerInput" step="1" min="0" value="545" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                                Hours per day:
+                                <input type="number" id="hoursPerDayInput" step="0.5" min="0" value="10" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                            </label>
+                            <label>
+                                MW per tracker:
+                                <input type="number" id="mwPerTrackerInput" step="0.001" min="0" value="0.048" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
                             </label>
                             <label>
                                 Modules per tracker:
-                                <input type="number" id="modulesPerTrackerInput" step="1" min="0" value="28" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                                <input type="number" id="modulesPerTrackerInput" step="1" min="0" value="87" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
                             </label>
+                            <div id="workingDaysDisplay" style="align-self:center; color:#55636f;"></div>
+                            <div id="projectDateRangeDisplay" style="align-self:center; color:#55636f;"></div>
                         </div>
                     </div>
                     <table id="manpowerTable" style="width:100%; border-collapse:collapse; font-size:12px;">
@@ -1100,11 +1141,15 @@
         let snapshotSeries = [];   // [{date, perStage:{}, total}] - flight-date snapshots
         let tableSeries = [];      // [{date, perStage:{}, total}] - snapshots plus in-between dates
 
-        // Manpower configuration (hardcoded initial values, editable in UI)
+        // Manpower configuration (project defaults loaded from backend, editable in UI)
         // Keys are YYYY-MM-DD (display format from /api/dates.display)
-        const HOURS_PER_DAY = 10; // assumed working hours per person per day
-        let MODULE_WATTAGE = 545; // W per module, editable in Settings view
-        let MODULES_PER_TRACKER = 28; // editable in Settings view
+        let HOURS_PER_DAY = 10;
+        let MW_PER_TRACKER = 0.048;
+        let MODULES_PER_TRACKER = 87;
+        let PROJECT_WORKING_DAYS = [1, 2, 3, 4, 5];
+        let PROJECT_START_DATE = null;
+        let PROJECT_END_DATE = null;
+        const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         // Per-date manpower config; values are per-stage + derived total, e.g.:
         // { pile: 10, torque_tube: 10, module_rails: 5, solar_panel: 5, total: 30 }
         let manpowerConfig = {};
@@ -1120,12 +1165,78 @@
         // Actual completion dates per stage (user input, one date per stage)
         // Keys use stageDefinitions keys, e.g. 'pile', 'torque_tube', etc.
         let actualStageDates = {};
+
+        function isConfiguredWorkingDay(date) {
+            return PROJECT_WORKING_DAYS.includes(date.getDay());
+        }
+
+        function formatWorkingDaySummary(days) {
+            const source = Array.isArray(days) && days.length ? days : PROJECT_WORKING_DAYS;
+            return source.map(day => WEEKDAY_LABELS[day] || day).join(', ');
+        }
+
+        function syncProjectSettingsPanel() {
+            const hoursInput = document.getElementById('hoursPerDayInput');
+            const mwInput = document.getElementById('mwPerTrackerInput');
+            const modInput = document.getElementById('modulesPerTrackerInput');
+            const workingDaysDisplay = document.getElementById('workingDaysDisplay');
+            const projectDateRangeDisplay = document.getElementById('projectDateRangeDisplay');
+
+            if (hoursInput) {
+                hoursInput.value = HOURS_PER_DAY.toString();
+            }
+            if (mwInput) {
+                mwInput.value = MW_PER_TRACKER.toString();
+            }
+            if (modInput) {
+                modInput.value = MODULES_PER_TRACKER.toString();
+            }
+            if (workingDaysDisplay) {
+                workingDaysDisplay.textContent = `Working days: ${formatWorkingDaySummary(PROJECT_WORKING_DAYS) || 'Not set'}`;
+            }
+            if (projectDateRangeDisplay) {
+                const start = PROJECT_START_DATE || 'Not set';
+                const end = PROJECT_END_DATE || 'Not set';
+                projectDateRangeDisplay.textContent = `Date range: ${start} to ${end}`;
+            }
+        }
+
+        async function loadProjectSettings() {
+            try {
+                const response = await timedFetch('/api/project_settings', {}, 'project-settings');
+                const data = await response.json();
+                if (!data || data.error) {
+                    console.warn('Unable to load project settings', data?.error || data);
+                    syncProjectSettingsPanel();
+                    return;
+                }
+
+                const hoursPerDay = parseFloat(data.hours_per_day);
+                const mwPerTracker = parseFloat(data.mw_per_tracker);
+                const modulesPerTracker = parseFloat(data.modules_per_tracker);
+                const workingDays = Array.isArray(data.working_days)
+                    ? data.working_days.map(day => parseInt(day, 10)).filter(day => !Number.isNaN(day))
+                    : [];
+
+                HOURS_PER_DAY = (!Number.isNaN(hoursPerDay) && hoursPerDay > 0) ? hoursPerDay : HOURS_PER_DAY;
+                MW_PER_TRACKER = (!Number.isNaN(mwPerTracker) && mwPerTracker >= 0) ? mwPerTracker : MW_PER_TRACKER;
+                MODULES_PER_TRACKER = (!Number.isNaN(modulesPerTracker) && modulesPerTracker >= 0) ? modulesPerTracker : MODULES_PER_TRACKER;
+                PROJECT_WORKING_DAYS = workingDays.length ? Array.from(new Set(workingDays)).sort((a, b) => a - b) : PROJECT_WORKING_DAYS;
+                PROJECT_START_DATE = data.project_start_date || PROJECT_START_DATE;
+                PROJECT_END_DATE = data.project_end_date || PROJECT_END_DATE;
+            } catch (error) {
+                console.warn('Error loading project settings:', error);
+            }
+
+            syncProjectSettingsPanel();
+        }
         
         // Initialize
         async function init() {
             const pageInitStart = performance.now();
             try {
                 setupViewTabs();
+                await loadProjectSettings();
 
                 if (HAS_ZONES) {
                     await initZoneProject();
@@ -1178,18 +1289,18 @@
                     // Set labels
                     document.getElementById('timelineStart').textContent = availableDates[0].display;
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                    document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                    updateTimelineCurrent(0);
                     
                     slider.addEventListener('input', (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
                         scheduleLayoutLoad(selectedDate.date, true); // Preserve state when switching dates
                     });
                     slider.addEventListener('change', (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
                         loadLayout(selectedDate.date, true);
                     });
 
@@ -1220,6 +1331,7 @@
                 if (zonePicker) zonePicker.style.display = 'block';
                 if (layoutWrapper) layoutWrapper.style.display = 'none';
                 if (timelineContainer) timelineContainer.style.display = 'none';
+                updateSelectedZoneBanner();
                 isZonePickerActive = true;
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
                 const filterSection = document.getElementById('filterSection');
@@ -1270,18 +1382,20 @@
                         slider.value = 0;
                         document.getElementById('timelineStart').textContent = availableDates[0].display;
                         document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                        document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                        updateTimelineCurrent(0);
                         slider.oninput = (e) => {
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
-                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            updateTimelineCurrent(index);
+                            updateSelectedZoneBanner(selectedDate.date);
                             scheduleZoneMapUpdate(selectedDate.date);
                         };
                         slider.onchange = (e) => {
                             if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
-                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            updateTimelineCurrent(index);
+                            updateSelectedZoneBanner(selectedDate.date);
                             updateZoneMapForDate(selectedDate.date);
                         };
                         renderTimelineDots();
@@ -1337,6 +1451,7 @@
 
         async function selectZone(zone) {
             selectedZone = zone;
+            updateSelectedZoneBanner();
             latestSummaryRequestKey = `${zone}|${Date.now()}`;
             const summaryRequestKey = latestSummaryRequestKey;
             const zonePicker = document.getElementById('zonePicker');
@@ -1376,17 +1491,20 @@
                 slider.value = preferredZoneDateIndex;
                 document.getElementById('timelineStart').textContent = availableDates[0].display;
                 document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                document.getElementById('timelineCurrent').textContent = availableDates[preferredZoneDateIndex].display;
+                updateTimelineCurrent(preferredZoneDateIndex);
+                updateSelectedZoneBanner(preferredZoneDateId);
                 slider.oninput = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
-                    document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                    updateTimelineCurrent(index);
+                    updateSelectedZoneBanner(selectedDate.date);
                     scheduleLayoutLoad(selectedDate.date, true);
                 };
                 slider.onchange = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
-                    document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                    updateTimelineCurrent(index);
+                    updateSelectedZoneBanner(selectedDate.date);
                     loadLayout(selectedDate.date, true);
                 };
                 renderTimelineDots();
@@ -1425,6 +1543,7 @@
 
         function returnToZonePicker() {
             selectedZone = null;
+            updateSelectedZoneBanner();
             currentDate = null;
             availableDates = zoneMapDates;
             layoutData = null;
@@ -1448,18 +1567,20 @@
                     slider.value = restoredZoneDateIndex;
                     document.getElementById('timelineStart').textContent = availableDates[0].display;
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                    document.getElementById('timelineCurrent').textContent = availableDates[restoredZoneDateIndex].display;
+                    updateTimelineCurrent(restoredZoneDateIndex);
                     slider.oninput = (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
+                        updateSelectedZoneBanner(selectedDate.date);
                         scheduleZoneMapUpdate(selectedDate.date);
                     };
                     slider.onchange = (e) => {
                         if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
+                        updateSelectedZoneBanner(selectedDate.date);
                         updateZoneMapForDate(selectedDate.date);
                     };
                     renderTimelineDots();
@@ -1610,6 +1731,26 @@
         function returnToProjectSelection() {
             window.location.href = '/';
         }
+
+        function updateSelectedZoneBanner(dateOverride = null) {
+            const zoneBanner = document.getElementById('selectedZoneBanner');
+            const zoneValue = document.getElementById('selectedZoneValue');
+            const dateValue = document.getElementById('selectedDateValue');
+            if (!zoneBanner || !zoneValue || !dateValue) return;
+
+            if (HAS_ZONES && selectedZone) {
+                const selectedDateId = dateOverride || currentDate;
+                const selectedDateEntry = availableDates.find(d => d.date === selectedDateId);
+                const selectedDateLabel = selectedDateEntry?.display || selectedDateId;
+                zoneValue.textContent = `Zone: ${selectedZone}`;
+                dateValue.textContent = selectedDateLabel ? `Date: ${selectedDateLabel}` : '';
+                zoneBanner.style.display = 'block';
+            } else {
+                zoneValue.textContent = '';
+                dateValue.textContent = '';
+                zoneBanner.style.display = 'none';
+            }
+        }
         
         function setupViewTabs() {
             const tabs = document.querySelectorAll('.view-tab');
@@ -1659,8 +1800,7 @@
             if (tableSeries.length) {
                 tableSeries.forEach(row => {
                     const d = new Date(row.date + 'T00:00:00');
-                    const day = d.getDay(); // 0=Sun, 6=Sat
-                    if (day === 0 || day === 6) return; // skip weekends
+                    if (!isConfiguredWorkingDay(d)) return;
 
                     if (!manpowerConfig[row.date]) {
                         manpowerConfig[row.date] = {
@@ -1756,7 +1896,7 @@
             });
 
             // Build tableSeries over all calendar days between first and last flight.
-            // Progress between flight dates is split evenly across working days (Mon–Fri),
+            // Progress between flight dates is split evenly across configured working days,
             // and counts are cumulative by date.
             tableSeries = [];
             if (snapshotSeries.length > 0) {
@@ -1764,11 +1904,6 @@
 
                 function parseDate(str) {
                     return new Date(str + 'T00:00:00');
-                }
-
-                function isWeekend(date) {
-                    const day = date.getDay(); // 0=Sun, 6=Sat
-                    return day === 0 || day === 6;
                 }
 
                 const firstSnap = snapshotSeries[0];
@@ -1790,7 +1925,7 @@
                     const workingDates = [];
                     for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
                         const d = new Date(t);
-                        if (!isWeekend(d)) {
+                        if (isConfiguredWorkingDay(d)) {
                             workingDates.push(d);
                         }
                     }
@@ -1867,12 +2002,7 @@
                 return new Date(str + 'T00:00:00');
             }
 
-            function isWeekend(date) {
-                const day = date.getDay(); // 0=Sun, 6=Sat
-                return day === 0 || day === 6;
-            }
-
-            // Build series over all working days between flights (Mon–Fri),
+            // Build series over all working days between flights,
             // distributing completions evenly across working days.
             workingDaySeries = [];
 
@@ -1890,7 +2020,7 @@
                 const oneDayMs = 24 * 60 * 60 * 1000;
                 for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
                     const d = new Date(t);
-                    if (!isWeekend(d)) {
+                    if (isConfiguredWorkingDay(d)) {
                         workingDates.push(new Date(d));
                     }
                 }
@@ -2089,8 +2219,7 @@
                     const mh = people * HOURS_PER_DAY;
 
                     const completions = stageCompletions;
-                    // Convert module completions to MW using module wattage (W) and modules per tracker
-                    const mwCompleted = completions * MODULES_PER_TRACKER * MODULE_WATTAGE / 1_000_000;
+                    const mwCompleted = completions * MW_PER_TRACKER;
                     const modulesCompleted = completions * MODULES_PER_TRACKER;
 
                     const mhPerMwRaw = mwCompleted > 0 ? mh / mwCompleted : 0;
@@ -2222,23 +2351,32 @@
             });
 
             // Wire global parameter inputs
+            const hoursInput = document.getElementById('hoursPerDayInput');
             const mwInput = document.getElementById('mwPerTrackerInput');
             const modInput = document.getElementById('modulesPerTrackerInput');
-            if (mwInput) {
-                mwInput.value = MODULE_WATTAGE.toString();
-                mwInput.addEventListener('change', (e) => {
+            if (hoursInput) {
+                hoursInput.value = HOURS_PER_DAY.toString();
+                hoursInput.onchange = (e) => {
                     const v = parseFloat(e.target.value);
-                    MODULE_WATTAGE = isNaN(v) || v < 0 ? 0 : v;
+                    HOURS_PER_DAY = isNaN(v) || v < 0 ? 0 : v;
                     updateProductivityChart();
-                });
+                };
+            }
+            if (mwInput) {
+                mwInput.value = MW_PER_TRACKER.toString();
+                mwInput.onchange = (e) => {
+                    const v = parseFloat(e.target.value);
+                    MW_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
+                    updateProductivityChart();
+                };
             }
             if (modInput) {
                 modInput.value = MODULES_PER_TRACKER.toString();
-                modInput.addEventListener('change', (e) => {
+                modInput.onchange = (e) => {
                     const v = parseFloat(e.target.value);
                     MODULES_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
                     updateProductivityChart();
-                });
+                };
             }
         }
 
@@ -2359,13 +2497,12 @@
             }
             if (startIdx === -1) return null;
 
-            // Count working days (Mon–Fri) from startIdx to last index (inclusive)
+            // Count configured working days from startIdx to last index (inclusive)
             let workingDays = 0;
             for (let i = startIdx; i < tableSeries.length; i++) {
                 const dateStr = tableSeries[i].date;
                 const d = new Date(dateStr + 'T00:00:00');
-                const day = d.getDay(); // 0=Sun, 6=Sat
-                if (day !== 0 && day !== 6) {
+                if (isConfiguredWorkingDay(d)) {
                     workingDays += 1;
                 }
             }
@@ -2381,14 +2518,13 @@
 
             const neededWorkingDays = Math.ceil(remaining / ratePerWorkingDay);
 
-            // Add working days forward from lastRow.date, skipping weekends
+            // Add working days forward from lastRow.date using project working days
             let d = new Date(lastRow.date + 'T00:00:00');
             let remainingDays = neededWorkingDays;
             const oneDayMs = 24 * 60 * 60 * 1000;
             while (remainingDays > 0) {
                 d = new Date(d.getTime() + oneDayMs);
-                const day = d.getDay();
-                if (day === 0 || day === 6) continue;
+                if (!isConfiguredWorkingDay(d)) continue;
                 remainingDays -= 1;
             }
             return d.toISOString().slice(0, 10);
@@ -2558,6 +2694,7 @@
                     return;
                 }
                 currentDate = dateStr;
+                updateSelectedZoneBanner();
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
                 if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) {
                     console.log('[ClientCache] Skipping duplicate layout reload', { requestedLayoutKey });
@@ -2569,7 +2706,7 @@
                     const dateIndex = availableDates.findIndex(d => d.date === dateStr);
                     if (dateIndex >= 0) {
                         document.getElementById('timelineSlider').value = dateIndex;
-                        document.getElementById('timelineCurrent').textContent = availableDates[dateIndex].display;
+                        updateTimelineCurrent(dateIndex);
                     }
                 }
                 
@@ -2980,21 +3117,44 @@
         }
         
         function updateTimelineWidth() {
-            const canvas = document.getElementById('layoutCanvas');
             const timelineContainer = document.getElementById('timelineContainer');
-            const layoutView = document.querySelector('.layout-view');
-            if (canvas && timelineContainer && layoutView) {
-                // Make timeline extend across the full canvas width (with some padding)
-                const mainViewRect = document.querySelector('.main-view').getBoundingClientRect();
-                const canvasRect = canvas.getBoundingClientRect();
-                
-                // Use full canvas width with small padding on sides
-                const timelineWidth = canvas.width * 0.95; // 95% of canvas width
-                const leftPosition = canvasRect.left - mainViewRect.left + (canvas.width * 0.025); // 2.5% padding on left
-                
-                timelineContainer.style.left = leftPosition + 'px';
-                timelineContainer.style.width = timelineWidth + 'px';
+            if (timelineContainer) {
+                timelineContainer.style.left = '0';
+                timelineContainer.style.width = '100%';
             }
+        }
+
+        function updateTimelineCurrent(index = null) {
+            const slider = document.getElementById('timelineSlider');
+            const currentEl = document.getElementById('timelineCurrent');
+            if (!slider || !currentEl || !availableDates.length) return;
+
+            const numericIndex = index === null ? parseInt(slider.value || '0', 10) : index;
+            const safeIndex = Math.max(
+                0,
+                Math.min(Number.isFinite(numericIndex) ? numericIndex : 0, availableDates.length - 1)
+            );
+            const selectedDate = availableDates[safeIndex];
+            currentEl.textContent = selectedDate.display;
+
+            const sliderWidth = slider.clientWidth || 0;
+            if (!sliderWidth) {
+                currentEl.style.visibility = 'hidden';
+                requestAnimationFrame(() => updateTimelineCurrent(safeIndex));
+                return;
+            }
+
+            const thumbWidth = 16;
+            const maxIndex = Math.max(availableDates.length - 1, 1);
+            const usableWidth = Math.max(sliderWidth - thumbWidth, 0);
+            const rawLeft = (thumbWidth / 2) + ((safeIndex / maxIndex) * usableWidth);
+            const labelHalfWidth = currentEl.offsetWidth / 2;
+            const minLeft = labelHalfWidth;
+            const maxLeft = Math.max(sliderWidth - labelHalfWidth, minLeft);
+            const clampedLeft = Math.min(Math.max(rawLeft, minLeft), maxLeft);
+
+            currentEl.style.left = `${clampedLeft}px`;
+            currentEl.style.visibility = 'visible';
         }
 
         function renderTimelineDots() {
@@ -3012,6 +3172,7 @@
         
         function updateTimelinePosition() {
             updateTimelineWidth();
+            updateTimelineCurrent();
         }
         
         // Convert lat/lon boundaries to canvas pixel coordinates

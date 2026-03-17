@@ -12,27 +12,37 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
-            background: #f5f5f5;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Roboto", "Oxygen", "Ubuntu", "Cantarell", sans-serif;
+            background: #f5f7fa;
             color: #222;
             min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
             padding: 24px;
+        }
+
+        .page {
+            width: 100%;
+            max-width: 1100px;
+            margin: 0 auto;
         }
 
         .card {
             background: white;
-            border-radius: 12px;
-            padding: 32px;
+            border-radius: 16px;
+            padding: 28px;
             width: 100%;
-            max-width: 520px;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+        }
+
+        .header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 16px;
+            margin-bottom: 20px;
         }
 
         h1 {
-            font-size: 24px;
+            font-size: 28px;
             margin-bottom: 8px;
             color: #014059;
         }
@@ -40,57 +50,543 @@
         p {
             font-size: 14px;
             color: #555;
-            margin-bottom: 24px;
+            line-height: 1.5;
         }
 
-        .project-list {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 12px;
-        }
-
+        .primary-btn,
+        .secondary-btn,
         .project-link {
             display: inline-flex;
             align-items: center;
             justify-content: center;
             text-decoration: none;
-            padding: 12px 16px;
-            border-radius: 8px;
+            padding: 10px 14px;
+            border-radius: 10px;
             border: 1px solid #014059;
-            color: #014059;
+            font-size: 14px;
             font-weight: 600;
-            background: #f7fbfd;
+            cursor: pointer;
             transition: all 0.15s ease;
         }
 
-        .project-link:hover {
+        .primary-btn,
+        .project-link {
             background: #014059;
             color: #fff;
         }
 
+        .primary-btn:hover,
+        .project-link:hover {
+            background: #02577a;
+            border-color: #02577a;
+        }
+
+        .secondary-btn {
+            background: #f7fbfd;
+            color: #014059;
+        }
+
+        .secondary-btn:hover {
+            background: #e8f4f9;
+        }
+
+        .project-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+
+        .project-card {
+            border: 1px solid #d8e3ea;
+            border-radius: 14px;
+            padding: 16px;
+            background: #fbfdff;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .project-card h2 {
+            font-size: 18px;
+            color: #014059;
+        }
+
+        .project-meta {
+            display: grid;
+            gap: 6px;
+            font-size: 13px;
+            color: #43505a;
+        }
+
+        .meta-muted {
+            color: #697782;
+            font-size: 12px;
+        }
+
+        .project-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 4px;
+        }
+
+        .status-message {
+            display: none;
+            margin-bottom: 16px;
+            padding: 10px 12px;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .status-message.success {
+            display: block;
+            background: #edf9f1;
+            border: 1px solid #b8e0c3;
+            color: #1d6a34;
+        }
+
+        .status-message.error {
+            display: block;
+            background: #fff1f0;
+            border: 1px solid #f0bbb7;
+            color: #a61b1b;
+        }
+
         .empty {
-            padding: 12px 16px;
-            border-radius: 8px;
+            padding: 16px;
+            border-radius: 12px;
             background: #fff4e5;
             color: #8a5b00;
             border: 1px solid #ffd59e;
             font-size: 14px;
         }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.35);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1000;
+        }
+
+        .modal-backdrop.visible {
+            display: flex;
+        }
+
+        .modal {
+            width: 100%;
+            max-width: 640px;
+            background: #fff;
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 20px 44px rgba(0, 0, 0, 0.18);
+        }
+
+        .modal h2 {
+            font-size: 22px;
+            color: #014059;
+            margin-bottom: 8px;
+        }
+
+        .modal p {
+            margin-bottom: 18px;
+        }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px 16px;
+        }
+
+        .form-field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-field.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .form-field label {
+            font-size: 13px;
+            font-weight: 600;
+            color: #014059;
+        }
+
+        .form-field input {
+            width: 100%;
+            padding: 9px 10px;
+            border: 1px solid #c9d7df;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .form-field input[readonly] {
+            background: #f5f7fa;
+            color: #55636f;
+        }
+
+        .helper-text {
+            font-size: 12px;
+            color: #6a7781;
+        }
+
+        .day-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 14px;
+            padding: 10px 12px;
+            border: 1px solid #c9d7df;
+            border-radius: 10px;
+            background: #fafcfe;
+        }
+
+        .day-option {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: #33414a;
+        }
+
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 720px) {
+            body {
+                padding: 16px;
+            }
+
+            .card,
+            .modal {
+                padding: 20px;
+            }
+
+            .header-row {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .form-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .project-actions {
+                flex-direction: column;
+            }
+        }
     </style>
 </head>
 <body>
-    <div class="card">
-        <h1>Select a Project</h1>
-        <p>Choose which tracker layout you want to view.</p>
-        <div class="project-list">
-            {% if projects %}
-                {% for project in projects %}
-                    <a class="project-link" href="/project/{{ project }}">{{ project }}</a>
-                {% endfor %}
-            {% else %}
-                <div class="empty">No projects found in layout_data.</div>
-            {% endif %}
+    <div class="page">
+        <div class="card">
+            <div class="header-row">
+                <div>
+                    <h1>Select a Project</h1>
+                    <p>Choose which tracker layout you want to view, or create and manage project settings before entering the application.</p>
+                </div>
+                <button class="primary-btn" id="createProjectBtn" type="button">Create Project</button>
+            </div>
+
+            <div id="statusMessage" class="status-message"></div>
+            <div class="project-list" id="projectList"></div>
         </div>
     </div>
+
+    <div class="modal-backdrop" id="projectModalBackdrop">
+        <div class="modal" role="dialog" aria-modal="true" aria-labelledby="projectModalTitle">
+            <h2 id="projectModalTitle">Create Project</h2>
+            <p id="projectModalSubtitle">Define the project settings stored under the project folder on the mounted file share.</p>
+            <div id="formMessage" class="status-message"></div>
+            <form id="projectForm">
+                <div class="form-grid">
+                    <div class="form-field">
+                        <label for="projectNameInput">Project Name</label>
+                        <input id="projectNameInput" name="project_name" type="text" maxlength="80" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="hoursPerDayInput">Hours Per Day</label>
+                        <input id="hoursPerDayInput" name="hours_per_day" type="number" step="0.5" min="0.5" required>
+                    </div>
+                    <div class="form-field">
+                        <label for="projectStartDateInput">Project Start Date</label>
+                        <input id="projectStartDateInput" name="project_start_date" type="date">
+                    </div>
+                    <div class="form-field">
+                        <label for="projectEndDateInput">Project End Date</label>
+                        <input id="projectEndDateInput" name="project_end_date" type="date">
+                    </div>
+                    <div class="form-field full-width">
+                        <label>Working Days</label>
+                        <div class="day-grid" id="workingDaysContainer"></div>
+                    </div>
+                    <div class="form-field">
+                        <label for="mwPerTrackerInput">MW Per Tracker</label>
+                        <input id="mwPerTrackerInput" name="mw_per_tracker" type="number" step="0.001" readonly>
+                        <div class="helper-text">Derived from the project construction JSON when available.</div>
+                    </div>
+                    <div class="form-field">
+                        <label for="modulesPerTrackerInput">Modules Per Tracker</label>
+                        <input id="modulesPerTrackerInput" name="modules_per_tracker" type="number" step="1" readonly>
+                        <div class="helper-text">Derived from the project construction JSON when available.</div>
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button class="secondary-btn" id="cancelProjectBtn" type="button">Cancel</button>
+                    <button class="primary-btn" id="saveProjectBtn" type="submit">Save Project</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        const initialProjects = {{ projects|tojson }};
+        const defaultWorkingDays = [1, 2, 3, 4, 5];
+        const weekdayOptions = [
+            { value: 0, label: "Sun" },
+            { value: 1, label: "Mon" },
+            { value: 2, label: "Tue" },
+            { value: 3, label: "Wed" },
+            { value: 4, label: "Thu" },
+            { value: 5, label: "Fri" },
+            { value: 6, label: "Sat" }
+        ];
+
+        let projects = Array.isArray(initialProjects) ? initialProjects : [];
+        let currentMode = "create";
+        let editingProjectName = null;
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/\"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+        }
+
+        function showMessage(element, message, kind) {
+            if (!element) return;
+            element.textContent = message || "";
+            element.className = "status-message";
+            if (message) {
+                element.classList.add(kind || "success");
+            }
+        }
+
+        function clearMessage(element) {
+            showMessage(element, "", "");
+        }
+
+        function formatWorkingDays(project) {
+            const labels = project.working_day_labels || [];
+            return labels.length ? labels.join(", ") : "Not set";
+        }
+
+        function formatMetric(value, digits = 3) {
+            if (value === null || value === undefined || value === "") return "Not available";
+            return Number(value).toFixed(digits).replace(/\.0+$/, "").replace(/(\.\d*?)0+$/, "$1");
+        }
+
+        function renderProjects() {
+            const list = document.getElementById("projectList");
+            if (!list) return;
+
+            if (!projects.length) {
+                list.innerHTML = '<div class="empty">No projects found yet. Create the first project to initialize its folder and settings.</div>';
+                return;
+            }
+
+            list.innerHTML = projects.map((project) => `
+                <div class="project-card">
+                    <div>
+                        <h2>${escapeHtml(project.name)}</h2>
+                        <div class="meta-muted">${project.settings_exists ? "Settings saved" : "Using derived defaults"}</div>
+                    </div>
+                    <div class="project-meta">
+                        <div><strong>Date Range:</strong> ${escapeHtml(project.project_start_date || "Not set")} to ${escapeHtml(project.project_end_date || "Not set")}</div>
+                        <div><strong>Working Days:</strong> ${escapeHtml(formatWorkingDays(project))}</div>
+                        <div><strong>Hours/Day:</strong> ${escapeHtml(project.hours_per_day ?? "Not set")}</div>
+                        <div><strong>MW/Tracker:</strong> ${escapeHtml(formatMetric(project.mw_per_tracker, 3))}</div>
+                        <div><strong>Modules/Tracker:</strong> ${escapeHtml(project.modules_per_tracker ?? "Not available")}</div>
+                        ${project.project_json_path ? `<div class="meta-muted">Derived from ${escapeHtml(project.project_json_path)}</div>` : ""}
+                    </div>
+                    <div class="project-actions">
+                        <a class="project-link" href="/project/${encodeURIComponent(project.name)}">Open</a>
+                        <button class="secondary-btn edit-project-btn" type="button" data-project="${escapeHtml(project.name)}">Edit</button>
+                    </div>
+                </div>
+            `).join("");
+
+            list.querySelectorAll(".edit-project-btn").forEach((button) => {
+                button.addEventListener("click", () => openProjectModal("edit", button.dataset.project));
+            });
+        }
+
+        function renderWorkingDayOptions(selectedDays) {
+            const container = document.getElementById("workingDaysContainer");
+            if (!container) return;
+            const selected = Array.isArray(selectedDays) && selectedDays.length ? selectedDays : defaultWorkingDays;
+            container.innerHTML = weekdayOptions.map((day) => `
+                <label class="day-option">
+                    <input type="checkbox" name="working_day" value="${day.value}" ${selected.includes(day.value) ? "checked" : ""}>
+                    <span>${day.label}</span>
+                </label>
+            `).join("");
+        }
+
+        function setDerivedProjectMetrics(settings) {
+            const mwInput = document.getElementById("mwPerTrackerInput");
+            const modulesInput = document.getElementById("modulesPerTrackerInput");
+            if (mwInput) {
+                mwInput.value = settings?.mw_per_tracker ?? "";
+            }
+            if (modulesInput) {
+                modulesInput.value = settings?.modules_per_tracker ?? "";
+            }
+        }
+
+        function setFormValues(settings) {
+            document.getElementById("projectNameInput").value = settings?.project_name || "";
+            document.getElementById("hoursPerDayInput").value = settings?.hours_per_day ?? 10;
+            document.getElementById("projectStartDateInput").value = settings?.project_start_date || "";
+            document.getElementById("projectEndDateInput").value = settings?.project_end_date || "";
+            renderWorkingDayOptions(settings?.working_days || defaultWorkingDays);
+            setDerivedProjectMetrics(settings);
+        }
+
+        function openProjectModal(mode, projectName = null) {
+            currentMode = mode;
+            editingProjectName = projectName;
+            const backdrop = document.getElementById("projectModalBackdrop");
+            const title = document.getElementById("projectModalTitle");
+            const subtitle = document.getElementById("projectModalSubtitle");
+            const projectNameInput = document.getElementById("projectNameInput");
+            const saveButton = document.getElementById("saveProjectBtn");
+            clearMessage(document.getElementById("formMessage"));
+
+            if (mode === "create") {
+                title.textContent = "Create Project";
+                subtitle.textContent = "Create the project folder and save the initial project settings.";
+                saveButton.textContent = "Create Project";
+                projectNameInput.readOnly = false;
+                setFormValues({
+                    project_name: "",
+                    hours_per_day: 10,
+                    project_start_date: "",
+                    project_end_date: "",
+                    working_days: defaultWorkingDays,
+                    mw_per_tracker: "",
+                    modules_per_tracker: ""
+                });
+                backdrop.classList.add("visible");
+                return;
+            }
+
+            title.textContent = "Edit Project";
+            subtitle.textContent = `Update the saved settings for ${projectName}.`;
+            saveButton.textContent = "Save Changes";
+            projectNameInput.readOnly = true;
+            backdrop.classList.add("visible");
+
+            fetch(`/api/project_settings?project=${encodeURIComponent(projectName)}`)
+                .then((response) => response.json().then((data) => ({ ok: response.ok, data })))
+                .then(({ ok, data }) => {
+                    if (!ok) {
+                        throw new Error(data.error || "Unable to load project settings.");
+                    }
+                    setFormValues(data);
+                })
+                .catch((error) => {
+                    showMessage(document.getElementById("formMessage"), error.message, "error");
+                });
+        }
+
+        function closeProjectModal() {
+            document.getElementById("projectModalBackdrop").classList.remove("visible");
+            clearMessage(document.getElementById("formMessage"));
+        }
+
+        function collectFormPayload() {
+            const workingDays = Array.from(document.querySelectorAll('input[name="working_day"]:checked'))
+                .map((input) => Number(input.value))
+                .sort((a, b) => a - b);
+
+            return {
+                project_name: document.getElementById("projectNameInput").value.trim(),
+                hours_per_day: Number(document.getElementById("hoursPerDayInput").value),
+                project_start_date: document.getElementById("projectStartDateInput").value || null,
+                project_end_date: document.getElementById("projectEndDateInput").value || null,
+                working_days: workingDays,
+                mw_per_tracker: document.getElementById("mwPerTrackerInput").value || null,
+                modules_per_tracker: document.getElementById("modulesPerTrackerInput").value || null
+            };
+        }
+
+        async function refreshProjects(message = "", kind = "success") {
+            const response = await fetch("/api/projects");
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || "Unable to refresh projects.");
+            }
+            projects = data.projects || [];
+            renderProjects();
+            if (message) {
+                showMessage(document.getElementById("statusMessage"), message, kind);
+            }
+        }
+
+        async function handleProjectSubmit(event) {
+            event.preventDefault();
+            const formMessage = document.getElementById("formMessage");
+            clearMessage(formMessage);
+
+            const payload = collectFormPayload();
+            const isCreate = currentMode === "create";
+            const url = isCreate
+                ? "/api/projects"
+                : `/api/project_settings?project=${encodeURIComponent(editingProjectName)}`;
+            const method = isCreate ? "POST" : "PUT";
+
+            try {
+                const response = await fetch(url, {
+                    method,
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || "Unable to save project.");
+                }
+
+                await refreshProjects(
+                    isCreate
+                        ? `Project ${payload.project_name} created successfully.`
+                        : `Project ${editingProjectName} updated successfully.`
+                );
+                closeProjectModal();
+            } catch (error) {
+                showMessage(formMessage, error.message, "error");
+            }
+        }
+
+        document.getElementById("createProjectBtn").addEventListener("click", () => openProjectModal("create"));
+        document.getElementById("cancelProjectBtn").addEventListener("click", closeProjectModal);
+        document.getElementById("projectModalBackdrop").addEventListener("click", (event) => {
+            if (event.target.id === "projectModalBackdrop") {
+                closeProjectModal();
+            }
+        });
+        document.getElementById("projectForm").addEventListener("submit", handleProjectSubmit);
+
+        renderProjects();
+    </script>
 </body>
 </html>
