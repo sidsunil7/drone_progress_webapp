@@ -42,10 +42,12 @@ WEBP_QUALITY = int(os.environ.get("WEBP_QUALITY", "72"))
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "82"))
 APP_DATA_DIRNAME = "_app_data"
 PROJECT_SETTINGS_FILENAME = "project_settings.json"
+MANPOWER_DATA_FILENAME = "manpower_data.json"
 DEFAULT_WORKING_DAYS = [1, 2, 3, 4, 5]
 DEFAULT_HOURS_PER_DAY = 10
 VALID_PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$")
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+PRODUCTIVITY_STAGE_KEYS = ["pile", "torque_tube", "module_rails", "solar_panel"]
 
 
 def log_timing(label, start_time, **context):
@@ -378,6 +380,79 @@ def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
     return result
 
 
+@lru_cache(maxsize=16)
+def _all_zone_available_dates_cached(project_layout_dir, dir_sig):
+    """One-shot scan returning {zone: [(date_id, folder_path), ...]} sorted ascending.
+    Used by forward-fill helpers to find each zone's most recent prior flight."""
+    if not project_layout_dir or not os.path.exists(project_layout_dir):
+        return {}
+    result = {}
+    for item in os.listdir(project_layout_dir):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        folder_zones, folder_date, folder_time = parse_sonrisa_folder_info(item.strip())
+        if not folder_date or not folder_zones:
+            continue
+        date_id = f"{folder_date}_{folder_time}" if folder_time else folder_date
+        for z in folder_zones:
+            if z not in result:
+                result[z] = []
+            result[z].append((date_id, item_path))
+    for z in result:
+        result[z].sort(key=lambda x: x[0])
+    return result
+
+
+def _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig):
+    """Return (most_recent_date_id, folder_path) for zone at or before date_id, or None."""
+    all_dates = _all_zone_available_dates_cached(project_layout_dir, dir_sig)
+    zone_dates = all_dates.get(zone, [])
+    best = None
+    for d, path in zone_dates:
+        if d <= date_id:
+            best = (d, path)
+        else:
+            break  # list is sorted ascending
+    return best
+
+
+@lru_cache(maxsize=64)
+def _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig):
+    """Like _all_zone_stages_cached but forward-fills every zone that has no data on
+    date_id from its most recently available prior flight date."""
+    exact = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+    all_dates = _all_zone_available_dates_cached(project_layout_dir, dir_sig)
+
+    result = dict(exact)
+    for zone, zone_dates in all_dates.items():
+        if zone in result:
+            continue  # already have data for this exact date
+        # Find the most recent date <= date_id for this zone
+        best = None
+        for d, path in zone_dates:
+            if d <= date_id:
+                best = (d, path)
+            else:
+                break
+        if not best:
+            continue
+        _, folder_path = best
+        csv_path = find_sonrisa_zone_csv(folder_path, zone)
+        if not csv_path or not os.path.exists(csv_path):
+            continue
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+        counts = {}
+        for info in tracker_info.values():
+            stage = (info.get("stage") or "").lower().replace(" ", "_")
+            if stage:
+                counts[stage] = counts.get(stage, 0) + 1
+        if counts:
+            result[zone] = max(counts.items(), key=lambda x: x[1])[0]
+    return result
+
+
 def normalize_status(status):
     """Normalize status strings to snake_case like 'not_started', 'in_progress', 'completed'."""
     if not status:
@@ -660,6 +735,10 @@ def get_project_settings_path(project_layout_dir):
     return os.path.join(get_project_app_data_dir(project_layout_dir), PROJECT_SETTINGS_FILENAME)
 
 
+def get_project_manpower_data_path(project_layout_dir):
+    return os.path.join(get_project_app_data_dir(project_layout_dir), MANPOWER_DATA_FILENAME)
+
+
 def ensure_project_scaffold(project_layout_dir):
     os.makedirs(get_project_app_data_dir(project_layout_dir), exist_ok=True)
 
@@ -778,6 +857,68 @@ def get_project_records():
     return [build_project_record(project_name) for project_name in get_available_projects()]
 
 
+def normalize_manual_dates(values):
+    if values in (None, ""):
+        return []
+    if not isinstance(values, list):
+        raise ValueError("manual_dates must be a list")
+    normalized = []
+    for value in values:
+        parsed = parse_optional_iso_date(value)
+        if not parsed:
+            raise ValueError("manual_dates must contain YYYY-MM-DD strings")
+        if parsed not in normalized:
+            normalized.append(parsed)
+    return sorted(normalized)
+
+
+def normalize_actual_stage_dates(values):
+    if values in (None, ""):
+        values = {}
+    if not isinstance(values, dict):
+        raise ValueError("actual_stage_dates must be an object")
+    normalized = {}
+    for stage_key in PRODUCTIVITY_STAGE_KEYS:
+        raw_value = values.get(stage_key)
+        parsed = parse_optional_iso_date(raw_value)
+        if raw_value not in (None, "") and not parsed:
+            raise ValueError(f"actual_stage_dates.{stage_key} must use YYYY-MM-DD format.")
+        normalized[stage_key] = parsed
+    return normalized
+
+
+def normalize_manpower_config(values):
+    if values in (None, ""):
+        return {}
+    if not isinstance(values, dict):
+        raise ValueError("manpower_config must be an object")
+
+    normalized = {}
+    for raw_date, raw_config in values.items():
+        parsed_date = parse_optional_iso_date(raw_date)
+        if not parsed_date:
+            raise ValueError("manpower_config keys must use YYYY-MM-DD format.")
+        if not isinstance(raw_config, dict):
+            raise ValueError(f"manpower_config.{raw_date} must be an object")
+
+        entry = {}
+        total = 0
+        for stage_key in PRODUCTIVITY_STAGE_KEYS:
+            number = safe_float(raw_config.get(stage_key))
+            if number is None:
+                number = 0.0
+            if number < 0:
+                raise ValueError(f"manpower_config.{parsed_date}.{stage_key} must be greater than or equal to 0.")
+            if float(number).is_integer():
+                number = int(number)
+            entry[stage_key] = number
+            total += number
+        entry["total"] = total
+        normalized[parsed_date] = entry
+
+    return dict(sorted(normalized.items()))
+
+
 def validate_project_settings_payload(payload, *, require_project_name=False):
     cleaned = {}
     if require_project_name:
@@ -809,6 +950,15 @@ def validate_project_settings_payload(payload, *, require_project_name=False):
     cleaned["mw_per_tracker"] = mw_per_tracker
     cleaned["modules_per_tracker"] = modules_per_tracker
     return cleaned
+
+
+def validate_manpower_data_payload(payload):
+    payload = payload or {}
+    return {
+        "manual_dates": normalize_manual_dates(payload.get("manual_dates", [])),
+        "manpower_config": normalize_manpower_config(payload.get("manpower_config", {})),
+        "actual_stage_dates": normalize_actual_stage_dates(payload.get("actual_stage_dates", {})),
+    }
 
 
 def save_project_settings(project_name, payload, *, creating=False):
@@ -852,6 +1002,57 @@ def save_project_settings(project_name, payload, *, creating=False):
     atomic_write_json(settings_path, record)
     _project_has_zones_cache.pop(project_name, None)
     return build_project_settings_response(project_name)
+
+
+def build_manpower_data_response(project_name):
+    project_layout_dir = get_layout_dir(project_name)
+    data_path = get_project_manpower_data_path(project_layout_dir)
+    stored = read_json_file(data_path, default={}) if os.path.exists(data_path) else {}
+
+    try:
+        manual_dates = normalize_manual_dates(stored.get("manual_dates", []))
+    except ValueError:
+        manual_dates = []
+    try:
+        manpower_config = normalize_manpower_config(stored.get("manpower_config", {}))
+    except ValueError:
+        manpower_config = {}
+    try:
+        actual_stage_dates = normalize_actual_stage_dates(stored.get("actual_stage_dates", {}))
+    except ValueError:
+        actual_stage_dates = {stage_key: None for stage_key in PRODUCTIVITY_STAGE_KEYS}
+
+    return {
+        "project_name": project_name,
+        "manual_dates": manual_dates,
+        "manpower_config": manpower_config,
+        "actual_stage_dates": actual_stage_dates,
+        "created_at": stored.get("created_at"),
+        "updated_at": stored.get("updated_at"),
+        "data_exists": os.path.exists(data_path),
+    }
+
+
+def save_manpower_data(project_name, payload):
+    project_layout_dir = get_layout_dir(project_name)
+    if not os.path.isdir(project_layout_dir):
+        raise FileNotFoundError(f"Project not found: {project_name}")
+
+    ensure_project_scaffold(project_layout_dir)
+    data_path = get_project_manpower_data_path(project_layout_dir)
+    existing = read_json_file(data_path, default={}) if os.path.exists(data_path) else {}
+    now_iso = utc_now_iso()
+
+    record = {
+        "project_name": project_name,
+        "manual_dates": payload["manual_dates"],
+        "manpower_config": payload["manpower_config"],
+        "actual_stage_dates": payload["actual_stage_dates"],
+        "created_at": existing.get("created_at") or now_iso,
+        "updated_at": now_iso,
+    }
+    atomic_write_json(data_path, record)
+    return build_manpower_data_response(project_name)
 
 
 def resolve_project_name(raw_project):
@@ -1826,6 +2027,35 @@ def api_project_settings():
     return jsonify(settings)
 
 
+@app.route('/api/manpower_data', methods=['GET', 'PUT'])
+def api_manpower_data():
+    project_param = request.args.get('project')
+    if request.method == 'GET':
+        project_name = resolve_project_name(project_param) if project_param else get_project_from_request()
+        if not project_name:
+            return jsonify({'error': 'Project not found'}), 404
+        return jsonify(build_manpower_data_response(project_name))
+
+    payload = request.get_json(silent=True) or {}
+    project_name = resolve_project_name(project_param or payload.get('project_name'))
+    if not project_name:
+        project_name = get_project_from_request()
+    if not project_name:
+        return jsonify({'error': 'Project not found'}), 404
+
+    try:
+        cleaned = validate_manpower_data_payload(payload)
+        data = save_manpower_data(project_name, cleaned)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except FileNotFoundError as exc:
+        return jsonify({'error': str(exc)}), 404
+    except OSError as exc:
+        return jsonify({'error': f'Unable to save manpower data: {exc}'}), 500
+
+    return jsonify(data)
+
+
 @app.route('/api/date_summary/<date_str>')
 def get_date_summary(date_str):
     """Return lightweight summary data for charts/tables without full layout work."""
@@ -2248,7 +2478,8 @@ def get_zones():
     # Skip entirely when no date is requested — stages are unused for initial load.
     if date_id:
         stage_start = time.perf_counter()
-        zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+        # Forward-fill: zones without data on date_id use their most recent prior flight.
+        zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
         available_zones = [z for z in available_zones if zone_stage.get(z)]
         log_timing(
             "zones_calc_stage_filter",
@@ -2412,7 +2643,8 @@ def get_site_overview():
     setup_start = time.perf_counter()
     dir_sig = _get_dir_signature(project_layout_dir)
     available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
-    zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+    # Forward-fill: include any zone that has data at or before date_id.
+    zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
     available_zones = [z for z in available_zones if zone_stage.get(z)]
     log_timing(
         "site_overview_calc_setup",
@@ -2428,9 +2660,11 @@ def get_site_overview():
     stage_status_counts = {}
     aggregation_start = time.perf_counter()
     for zone in available_zones:
-        date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_id)
-        if not date_folder_path:
+        # Use most-recent folder at or before date_id so forward-filled zones are included.
+        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig)
+        if not best:
             continue
+        date_folder_path = best[1]
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
         if not csv_path or not os.path.exists(csv_path):
             continue
