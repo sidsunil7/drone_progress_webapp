@@ -43,12 +43,14 @@
             flex: 1;
             padding: 20px;
             padding-bottom: 0;
-            overflow: auto;
+            overflow: hidden;
             background: white;
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            justify-content: flex-start;
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) minmax(320px, 36%);
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
+            column-gap: 16px;
+            row-gap: 8px;
+            align-items: stretch;
             min-height: 0;
             position: relative;
         }
@@ -64,16 +66,46 @@
         
         .view-tabs {
             display: flex;
-            gap: 8px;
-            margin-bottom: 12px;
+            gap: 6px;
+            margin-bottom: 4px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            width: fit-content;
+            max-width: 100%;
+            grid-column: 1;
+            grid-row: 1;
+            align-self: start;
+        }
+
+        .selection-banner {
+            display: none;
+            align-self: flex-start;
+            margin: 0 0 8px 2px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            background: #eef6fa;
+            border: 1px solid #cfe2ec;
+            color: #014059;
+            font-size: 13px;
+            font-weight: 600;
+            width: fit-content;
+            max-width: 100%;
+            flex-shrink: 0;
+            grid-column: 1;
+            grid-row: 2;
+        }
+
+        .selection-banner-line + .selection-banner-line {
+            margin-top: 2px;
         }
         
         .view-tab {
-            padding: 6px 12px;
+            padding: 3px 8px;
             border-radius: 16px;
             border: 1px solid #ccc;
             background: #f5f5f5;
-            font-size: 13px;
+            font-size: 11px;
+            line-height: 1.2;
             cursor: pointer;
             color: #014059;
             transition: all 0.15s ease;
@@ -90,10 +122,37 @@
             height: 100%;
             display: none;
             flex-direction: column;
+            min-height: 0;
+            overflow: hidden;
         }
         
         .view-panel.active {
             display: flex;
+        }
+
+        #mapView.view-panel.active {
+            display: contents;
+        }
+
+        #tableView.view-panel.active,
+        #chartsView.view-panel.active,
+        #settingsView.view-panel.active {
+            grid-column: 1 / -1;
+            grid-row: 3 / 5;
+        }
+
+        #chartsView.view-panel.active {
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .charts-scroll-content {
+            flex: 1 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: max-content;
+            padding-right: 4px;
         }
         
         #layoutCanvas {
@@ -115,10 +174,11 @@
             flex: 1;
             min-height: 0;
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: center;
             position: relative;
             overflow: hidden;
+            order: 2;
         }
         
         .canvas-wrapper {
@@ -129,21 +189,23 @@
         }
         
         .zoom-controls {
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            z-index: 100;
+            position: static;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
+            order: 1;
+            flex: 0 0 auto;
+            align-self: flex-end;
+            width: 60px;
+            margin: 0 0 10px;
             background: white;
-            padding: 8px;
+            padding: 6px;
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.15);
         }
         
         .zoom-btn {
-            width: 36px;
+            width: 100%;
             height: 36px;
             border: 1px solid #ddd;
             background: white;
@@ -168,9 +230,13 @@
         }
         
         .zoom-reset {
-            font-size: 14px;
-            padding: 4px 8px;
-            height: auto;
+            width: 100%;
+            min-width: 0;
+            height: 36px;
+            padding: 0 8px;
+            font-size: 13px;
+            line-height: 1;
+            white-space: nowrap;
         }
         
         .loading {
@@ -283,12 +349,12 @@
         }
         
         .timeline-container {
-            position: absolute;
-            bottom: -12px; /* Place just below the layout image */
+            position: relative;
+            bottom: auto;
             left: 0;
-            right: 0;
+            right: auto;
             margin: 0;
-            padding: 4px 15px;
+            padding: 6px 12px;
             background: transparent;
             border-radius: 0;
             width: 100%;
@@ -298,6 +364,9 @@
             align-items: stretch;
             min-width: 0;
             z-index: 10;
+            flex-shrink: 0;
+            grid-column: 1 / -1;
+            grid-row: 4;
         }
         
         .timeline-container label {
@@ -342,13 +411,23 @@
             font-size: 10px;
             color: #666;
         }
-        
-        .timeline-current {
-            text-align: center;
+
+        .timeline-current-row {
+            position: relative;
+            height: 16px;
             margin-top: 3px;
+        }
+
+        .timeline-current {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: translateX(-50%);
             font-weight: bold;
             color: #014059;
             font-size: 11px;
+            white-space: nowrap;
+            pointer-events: none;
         }
 
         .timeline-dots {
@@ -421,32 +500,27 @@
         }
         
         .layout-wrapper {
-            display: flex;
-            gap: 20px;
-            width: 100%;
-            flex: 1;
-            min-height: 0;
-            align-items: flex-start;
-            padding-bottom: 80px; /* Extra space for timeline below the layout */
-            flex-wrap: nowrap;
+            display: contents;
         }
-        
         .layout-view {
-            flex: 1;
+            grid-column: 1;
+            grid-row: 3;
             display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             justify-content: flex-start;
             min-width: 0;
-            height: 100%;
             min-height: 0;
+            overflow: hidden;
+            position: relative;
         }
         
         .tracker-preview {
-            flex: 0 0 320px;
-            width: 320px;
+            grid-column: 2;
+            grid-row: 1 / 4;
+            width: auto;
             min-width: 280px;
-            max-width: 360px;
+            max-width: none;
             background: #ffffff;
             border: 1px solid #e0e0e0;
             border-radius: 8px;
@@ -454,10 +528,13 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.05);
             display: flex;
             flex-direction: column;
-            align-items: center;
+            align-items: stretch;
             justify-content: flex-start;
-            height: calc(100vh - 140px);
+            align-self: stretch;
+            min-height: 0;
+            max-height: none;
             overflow-y: auto;
+            margin-top: 0;
         }
         
         .tracker-zoom-controls {
@@ -491,6 +568,15 @@
 
         .tracker-zoom-btn:active {
             background: #e0e0e0;
+        }
+
+        #trackerZoomResetBtn {
+            width: auto;
+            min-width: 52px;
+            padding: 0 8px;
+            font-size: 12px;
+            line-height: 1;
+            white-space: nowrap;
         }
 
         .tracker-preview-image-wrapper {
@@ -706,7 +792,9 @@
             border: 1px solid #e0e0e0;
             border-radius: 8px;
             padding: 16px;
-            margin-bottom: 16px;
+            margin: 0;
+            grid-column: 1 / -1;
+            grid-row: 3;
         }
 
         .zone-picker h2 {
@@ -760,11 +848,15 @@
                 <button class="view-tab" data-view="charts">Charts</button>
                 <button class="view-tab" data-view="settings">Settings</button>
             </div>
+            <div class="selection-banner" id="selectedZoneBanner">
+                <div class="selection-banner-line" id="selectedZoneValue"></div>
+                <div class="selection-banner-line" id="selectedDateValue"></div>
+            </div>
 
             <!-- Map View -->
             <div id="mapView" class="view-panel active">
                 <div class="zone-picker" id="zonePicker" style="display: none;">
-                    <h2>Select a Zone</h2>
+                    <h2>Site View</h2>
                     <p>Available zones are highlighted in green. Click a zone to continue.</p>
                     <div class="zone-picker-content">
                         <div class="zone-map">
@@ -794,7 +886,9 @@
                         <span id="timelineStart"></span>
                         <span id="timelineEnd"></span>
                     </div>
-                    <div class="timeline-current" id="timelineCurrent"></div>
+                    <div class="timeline-current-row">
+                        <div class="timeline-current" id="timelineCurrent"></div>
+                    </div>
                     <div class="timeline-dots" id="timelineDots"></div>
                 </div>
             </div>
@@ -802,7 +896,7 @@
             <!-- Table View -->
             <div id="tableView" class="view-panel">
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
-                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Stage Progress by Date</h2>
+                    <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Components Complete by Date</h2>
                     <p id="tableDescription" style="font-size:12px; color:#666; margin-bottom:8px;">
                         Each row shows how many trackers have each main construction stage fully completed on that date (one stage per tracker).
                     </p>
@@ -817,6 +911,40 @@
                             </tr>
                         </thead>
                         <tbody id="dailyTableBody">
+                        </tbody>
+                    </table>
+                    <h2 style="font-size:16px; color:#014059; margin:18px 0 8px;">Rate of Component Completion by Date</h2>
+                    <p style="font-size:12px; color:#666; margin-bottom:8px;">
+                        Daily installed trackers per stage across interpolated working days between flights.
+                    </p>
+                    <table id="rateTable" style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rateTableBody">
+                        </tbody>
+                    </table>
+                    <h2 style="font-size:16px; color:#014059; margin:18px 0 8px;">Productivity by Date (MH/Tracker)</h2>
+                    <p style="font-size:12px; color:#666; margin-bottom:8px;">
+                        Daily man-hours per tracker using the crew assigned to each stage and the interpolated daily install rate.
+                    </p>
+                    <table id="productivityTable" style="width:100%; border-collapse:collapse; font-size:12px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:6px; border-bottom:1px solid #ddd;">Date</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Pile</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Torque Tubes</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Module Rails</th>
+                                <th style="text-align:right; padding:6px; border-bottom:1px solid #ddd;">Modules</th>
+                            </tr>
+                        </thead>
+                        <tbody id="productivityTableBody">
                         </tbody>
                     </table>
                     <p id="stageCompletionEstimates" style="display:none;"></p>
@@ -836,7 +964,7 @@
 
             <!-- Charts View -->
             <div id="chartsView" class="view-panel">
-                <div style="flex:1; display:flex; flex-direction:column; gap:12px;">
+                <div class="charts-scroll-content">
                     <div style="background:#fff; border-radius:8px; border:1px solid #e0e0e0; padding:12px; display:flex; flex-direction:column; gap:6px;">
                         <h2 style="font-size:16px; color:#014059; margin-bottom:4px;">Stage Distribution (Pie Chart)</h2>
                         <p style="font-size:12px; color:#666; margin-bottom:4px;">
@@ -864,19 +992,36 @@
                 <div style="flex:1; overflow:auto; background:#fff; border-radius:8px; padding:12px; border:1px solid #e0e0e0;">
                     <h2 style="font-size:16px; color:#014059; margin-bottom:8px;">Manpower Configuration</h2>
                     <p style="font-size:12px; color:#666; margin-bottom:8px;">
-                        Enter the total number of people working on site for each day. Edits here affect charts for this session only.
+                        Enter the total number of people working on site for each source date. Drone flight dates are added automatically, manual dates can be inserted below, and edits are saved for this project.
                     </p>
                     <div style="margin-bottom:10px; padding:8px; background:#f9f9f9; border-radius:6px; border:1px solid #e0e0e0;">
                         <div style="font-size:13px; color:#014059; font-weight:600; margin-bottom:4px;">Global Parameters</div>
                         <div style="display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:#333;">
                             <label>
-                                Module wattage (W):
-                                <input type="number" id="mwPerTrackerInput" step="1" min="0" value="545" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                                Hours per day:
+                                <input type="number" id="hoursPerDayInput" step="0.5" min="0" value="10" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                            </label>
+                            <label>
+                                MW per tracker:
+                                <input type="number" id="mwPerTrackerInput" step="0.001" min="0" value="0.048" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
                             </label>
                             <label>
                                 Modules per tracker:
-                                <input type="number" id="modulesPerTrackerInput" step="1" min="0" value="28" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
+                                <input type="number" id="modulesPerTrackerInput" step="1" min="0" value="87" style="width:80px; font-size:11px; padding:2px 4px; margin-left:4px;">
                             </label>
+                            <div id="workingDaysDisplay" style="align-self:center; color:#55636f;"></div>
+                            <div id="projectDateRangeDisplay" style="align-self:center; color:#55636f;"></div>
+                        </div>
+                    </div>
+                    <div style="margin-bottom:10px; padding:8px; background:#f9f9f9; border-radius:6px; border:1px solid #e0e0e0;">
+                        <div style="font-size:13px; color:#014059; font-weight:600; margin-bottom:4px;">Manual Date Entries</div>
+                        <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center;">
+                            <input type="date" id="manualDateInput" style="font-size:12px; padding:4px 6px;">
+                            <button type="button" class="secondary-btn" id="addManualDateBtn">Add Date</button>
+                            <div id="manpowerPersistenceStatus" style="font-size:12px; color:#55636f;"></div>
+                        </div>
+                        <div style="font-size:12px; color:#666; margin-top:6px;">
+                            Drone flight dates are added automatically. Use this to insert extra crew-change dates between flights.
                         </div>
                     </div>
                     <table id="manpowerTable" style="width:100%; border-collapse:collapse; font-size:12px;">
@@ -1100,14 +1245,21 @@
         let snapshotSeries = [];   // [{date, perStage:{}, total}] - flight-date snapshots
         let tableSeries = [];      // [{date, perStage:{}, total}] - snapshots plus in-between dates
 
-        // Manpower configuration (hardcoded initial values, editable in UI)
+        // Manpower configuration (project defaults loaded from backend, editable in UI)
         // Keys are YYYY-MM-DD (display format from /api/dates.display)
-        const HOURS_PER_DAY = 10; // assumed working hours per person per day
-        let MODULE_WATTAGE = 545; // W per module, editable in Settings view
-        let MODULES_PER_TRACKER = 28; // editable in Settings view
+        let HOURS_PER_DAY = 10;
+        let MW_PER_TRACKER = 0.048;
+        let MODULES_PER_TRACKER = 87;
+        let PROJECT_WORKING_DAYS = [1, 2, 3, 4, 5];
+        let PROJECT_START_DATE = null;
+        let PROJECT_END_DATE = null;
+        const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
         // Per-date manpower config; values are per-stage + derived total, e.g.:
         // { pile: 10, torque_tube: 10, module_rails: 5, solar_panel: 5, total: 30 }
         let manpowerConfig = {};
+        let manualDates = [];
+        let manpowerSaveTimer = null;
+        let manpowerDataLoaded = false;
         const DEFAULT_STAGE_MANPOWER = {
             pile: 10,
             torque_tube: 10,
@@ -1120,12 +1272,340 @@
         // Actual completion dates per stage (user input, one date per stage)
         // Keys use stageDefinitions keys, e.g. 'pile', 'torque_tube', etc.
         let actualStageDates = {};
+        const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+        function formatLocalIsoDate(date) {
+            if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function normalizeIsoDate(value) {
+            if (!value) return null;
+            if (typeof value === 'string' && ISO_DATE_PATTERN.test(value)) {
+                return value;
+            }
+            const parsed = new Date(`${value}T00:00:00`);
+            if (Number.isNaN(parsed.getTime())) return null;
+            return formatLocalIsoDate(parsed);
+        }
+
+        function parseLocalIsoDate(value) {
+            if (!value || !ISO_DATE_PATTERN.test(value)) return null;
+            const [year, month, day] = value.split('-').map(Number);
+            return new Date(year, month - 1, day, 12, 0, 0, 0);
+        }
+
+        function addLocalDays(date, days) {
+            const next = new Date(date);
+            next.setDate(next.getDate() + days);
+            return next;
+        }
+
+        function buildWorkingCalendarDates(startDateStr, endDateStr) {
+            const startDate = parseLocalIsoDate(startDateStr);
+            const endDate = parseLocalIsoDate(endDateStr);
+            if (!startDate || !endDate || startDate > endDate) return [];
+
+            const dates = [];
+            for (let d = new Date(startDate); d <= endDate; d = addLocalDays(d, 1)) {
+                if (isConfiguredWorkingDay(d)) {
+                    dates.push(formatLocalIsoDate(d));
+                }
+            }
+            return dates;
+        }
+
+        function formatNumericValue(value, digits = 2) {
+            if (value === null || value === undefined || Number.isNaN(value)) return '-';
+            const rounded = Number(value).toFixed(digits);
+            return rounded.replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
+        }
+
+        function cloneStageManpower(source = null, fallback = null) {
+            const base = fallback || DEFAULT_STAGE_MANPOWER;
+            const entry = {};
+            let total = 0;
+            stageDefinitions.forEach(stage => {
+                const raw = source?.[stage.key];
+                const fallbackValue = parseFloat(base?.[stage.key]);
+                let value = parseFloat(raw);
+                if (Number.isNaN(value) || value < 0) {
+                    value = Number.isNaN(fallbackValue) ? 0 : fallbackValue;
+                }
+                entry[stage.key] = value;
+                total += value;
+            });
+            entry.total = total;
+            return entry;
+        }
+
+        function getDroneDateDisplays() {
+            return availableDates.map(dateInfo => dateInfo.display);
+        }
+
+        function syncManualDatesWithConfig() {
+            manualDates = Array.from(new Set([...(manualDates || [])]))
+                .map(normalizeIsoDate)
+                .filter(Boolean)
+                .sort();
+        }
+
+        function getManpowerInputDates() {
+            const dates = new Set([
+                ...getDroneDateDisplays(),
+                ...(manualDates || []),
+                ...(PROJECT_START_DATE ? [PROJECT_START_DATE] : [])
+            ]);
+            return Array.from(dates).map(normalizeIsoDate).filter(Boolean).sort();
+        }
+
+        function serializeManpowerConfig() {
+            const serialized = {};
+            getManpowerInputDates().forEach(dateStr => {
+                const entry = cloneStageManpower(manpowerConfig[dateStr]);
+                serialized[dateStr] = {};
+                stageDefinitions.forEach(stage => {
+                    serialized[dateStr][stage.key] = entry[stage.key];
+                });
+            });
+            return serialized;
+        }
+
+        function getAnalyticsDateBounds() {
+            const dates = [
+                PROJECT_START_DATE,
+                PROJECT_END_DATE,
+                ...getDroneDateDisplays(),
+                ...(manualDates || []),
+                ...Object.keys(manpowerConfig || {})
+            ].map(normalizeIsoDate).filter(Boolean).sort();
+            if (!dates.length) {
+                return { min: null, max: null };
+            }
+            return { min: dates[0], max: dates[dates.length - 1] };
+        }
+
+        function setManpowerStatus(message, isError = false) {
+            const statusEl = document.getElementById('manpowerPersistenceStatus');
+            if (!statusEl) return;
+            statusEl.textContent = message || '';
+            statusEl.style.color = isError ? '#d32f2f' : '#55636f';
+        }
+
+        async function loadManpowerData(force = false) {
+            if (manpowerDataLoaded && !force) return;
+            try {
+                const response = await timedFetch('/api/manpower_data', {}, 'manpower-data');
+                const data = await response.json();
+                if (!response.ok || !data || data.error) {
+                    throw new Error(data?.error || 'Unable to load manpower data');
+                }
+
+                manualDates = Array.isArray(data.manual_dates)
+                    ? data.manual_dates.map(normalizeIsoDate).filter(Boolean).sort()
+                    : [];
+                manpowerConfig = {};
+                Object.entries(data.manpower_config || {}).forEach(([dateStr, config]) => {
+                    const normalizedDate = normalizeIsoDate(dateStr);
+                    if (!normalizedDate) return;
+                    manpowerConfig[normalizedDate] = cloneStageManpower(config);
+                });
+                actualStageDates = {};
+                stageDefinitions.forEach(stage => {
+                    actualStageDates[stage.key] = normalizeIsoDate(data.actual_stage_dates?.[stage.key]);
+                });
+                syncManualDatesWithConfig();
+                manpowerDataLoaded = true;
+                setManpowerStatus(data.updated_at ? `Saved ${data.updated_at}` : '');
+            } catch (error) {
+                console.warn('Error loading manpower data:', error);
+                stageDefinitions.forEach(stage => {
+                    if (!(stage.key in actualStageDates)) {
+                        actualStageDates[stage.key] = null;
+                    }
+                });
+                setManpowerStatus('Unable to load saved manpower data.', true);
+            }
+        }
+
+        async function saveManpowerData() {
+            const payload = {
+                project_name: PROJECT,
+                manual_dates: [...(manualDates || [])].sort(),
+                manpower_config: serializeManpowerConfig(),
+                actual_stage_dates: { ...actualStageDates }
+            };
+
+            const response = await fetch('/api/manpower_data', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data.error || 'Unable to save manpower data.');
+            }
+            setManpowerStatus(`Saved ${data.updated_at || ''}`.trim());
+        }
+
+        function scheduleManpowerSave() {
+            if (manpowerSaveTimer) {
+                clearTimeout(manpowerSaveTimer);
+            }
+            setManpowerStatus('Saving...');
+            manpowerSaveTimer = setTimeout(async () => {
+                manpowerSaveTimer = null;
+                try {
+                    await saveManpowerData();
+                } catch (error) {
+                    console.error('Error saving manpower data:', error);
+                    setManpowerStatus(error.message || 'Unable to save manpower data.', true);
+                }
+            }, 300);
+        }
+
+        function getForwardFilledManpowerMap(targetDates) {
+            const sortedTargets = [...targetDates].map(normalizeIsoDate).filter(Boolean).sort();
+            const sortedInputs = Object.keys(manpowerConfig).sort();
+            const output = {};
+            let nextIndex = 0;
+            let lastKnown = cloneStageManpower();
+
+            sortedTargets.forEach(dateStr => {
+                while (nextIndex < sortedInputs.length && sortedInputs[nextIndex] <= dateStr) {
+                    lastKnown = cloneStageManpower(manpowerConfig[sortedInputs[nextIndex]], lastKnown);
+                    nextIndex += 1;
+                }
+                output[dateStr] = cloneStageManpower(lastKnown, lastKnown);
+            });
+            return output;
+        }
+
+        function getSuggestedManpowerEntry(dateStr) {
+            const priorDates = Object.keys(manpowerConfig)
+                .filter(existingDate => existingDate <= dateStr)
+                .sort();
+            if (priorDates.length) {
+                return cloneStageManpower(manpowerConfig[priorDates[priorDates.length - 1]]);
+            }
+            return cloneStageManpower();
+        }
+
+        function setupManualDateControls() {
+            const input = document.getElementById('manualDateInput');
+            const button = document.getElementById('addManualDateBtn');
+            if (!input || !button || button.dataset.bound === 'true') return;
+
+            button.dataset.bound = 'true';
+            button.addEventListener('click', () => {
+                const dateStr = normalizeIsoDate(input.value);
+                const bounds = getAnalyticsDateBounds();
+                if (!dateStr) {
+                    setManpowerStatus('Choose a valid manual date first.', true);
+                    return;
+                }
+                if (bounds.min && dateStr < bounds.min) {
+                    setManpowerStatus(`Manual dates must be on or after ${bounds.min}.`, true);
+                    return;
+                }
+                if (bounds.max && dateStr > bounds.max) {
+                    setManpowerStatus(`Manual dates must be on or before ${bounds.max}.`, true);
+                    return;
+                }
+                if (manualDates.includes(dateStr) || getDroneDateDisplays().includes(dateStr)) {
+                    setManpowerStatus(`Date ${dateStr} already exists.`, true);
+                    return;
+                }
+
+                manualDates = [...manualDates, dateStr].sort();
+                manpowerConfig[dateStr] = getSuggestedManpowerEntry(dateStr);
+                initializeManpowerConfig();
+                renderManpowerTable();
+                updateManpowerChart();
+                updateProductivityChart();
+                renderProductivityTable();
+                scheduleManpowerSave();
+                setManpowerStatus(`Added manual date ${dateStr}.`);
+                input.value = dateStr;
+            });
+        }
+
+        function isConfiguredWorkingDay(date) {
+            return PROJECT_WORKING_DAYS.includes(date.getDay());
+        }
+
+        function formatWorkingDaySummary(days) {
+            const source = Array.isArray(days) && days.length ? days : PROJECT_WORKING_DAYS;
+            return source.map(day => WEEKDAY_LABELS[day] || day).join(', ');
+        }
+
+        function syncProjectSettingsPanel() {
+            const hoursInput = document.getElementById('hoursPerDayInput');
+            const mwInput = document.getElementById('mwPerTrackerInput');
+            const modInput = document.getElementById('modulesPerTrackerInput');
+            const workingDaysDisplay = document.getElementById('workingDaysDisplay');
+            const projectDateRangeDisplay = document.getElementById('projectDateRangeDisplay');
+
+            if (hoursInput) {
+                hoursInput.value = HOURS_PER_DAY.toString();
+            }
+            if (mwInput) {
+                mwInput.value = MW_PER_TRACKER.toString();
+            }
+            if (modInput) {
+                modInput.value = MODULES_PER_TRACKER.toString();
+            }
+            if (workingDaysDisplay) {
+                workingDaysDisplay.textContent = `Working days: ${formatWorkingDaySummary(PROJECT_WORKING_DAYS) || 'Not set'}`;
+            }
+            if (projectDateRangeDisplay) {
+                const start = PROJECT_START_DATE || 'Not set';
+                const end = PROJECT_END_DATE || 'Not set';
+                projectDateRangeDisplay.textContent = `Date range: ${start} to ${end}`;
+            }
+        }
+
+        async function loadProjectSettings() {
+            try {
+                const response = await timedFetch('/api/project_settings', {}, 'project-settings');
+                const data = await response.json();
+                if (!data || data.error) {
+                    console.warn('Unable to load project settings', data?.error || data);
+                    syncProjectSettingsPanel();
+                    return;
+                }
+
+                const hoursPerDay = parseFloat(data.hours_per_day);
+                const mwPerTracker = parseFloat(data.mw_per_tracker);
+                const modulesPerTracker = parseFloat(data.modules_per_tracker);
+                const workingDays = Array.isArray(data.working_days)
+                    ? data.working_days.map(day => parseInt(day, 10)).filter(day => !Number.isNaN(day))
+                    : [];
+
+                HOURS_PER_DAY = (!Number.isNaN(hoursPerDay) && hoursPerDay > 0) ? hoursPerDay : HOURS_PER_DAY;
+                MW_PER_TRACKER = (!Number.isNaN(mwPerTracker) && mwPerTracker >= 0) ? mwPerTracker : MW_PER_TRACKER;
+                MODULES_PER_TRACKER = (!Number.isNaN(modulesPerTracker) && modulesPerTracker >= 0) ? modulesPerTracker : MODULES_PER_TRACKER;
+                PROJECT_WORKING_DAYS = workingDays.length ? Array.from(new Set(workingDays)).sort((a, b) => a - b) : PROJECT_WORKING_DAYS;
+                PROJECT_START_DATE = data.project_start_date || PROJECT_START_DATE;
+                PROJECT_END_DATE = data.project_end_date || PROJECT_END_DATE;
+            } catch (error) {
+                console.warn('Error loading project settings:', error);
+            }
+
+            syncProjectSettingsPanel();
+        }
         
         // Initialize
         async function init() {
             const pageInitStart = performance.now();
             try {
                 setupViewTabs();
+                await loadProjectSettings();
+                await loadManpowerData();
+                setupManualDateControls();
 
                 if (HAS_ZONES) {
                     await initZoneProject();
@@ -1156,12 +1636,12 @@
                 if (siteOverviewSection) siteOverviewSection.style.display = 'none';
                 if (filterSection) filterSection.style.display = 'block';
 
-                // Initialize manpower config with default values for each working day (can be edited later)
                 initializeManpowerConfig();
-
                 buildWorkingDaySeries();
                 renderManpowerTable();
                 renderDailyTable();
+                renderRateTable();
+                renderProductivityTable();
                 updateStageCompletionEstimates();
                 initializeCharts();
                 initializeDailyPieChart();
@@ -1169,7 +1649,7 @@
                 // Setup timeline slider (show if more than one date)
                 const timelineContainer = document.getElementById('timelineContainer');
                 if (availableDates.length > 1) {
-                    timelineContainer.style.display = 'block';
+                    timelineContainer.style.display = '';
                     
                     const slider = document.getElementById('timelineSlider');
                     slider.max = availableDates.length - 1;
@@ -1178,18 +1658,18 @@
                     // Set labels
                     document.getElementById('timelineStart').textContent = availableDates[0].display;
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                    document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                    updateTimelineCurrent(0);
                     
                     slider.addEventListener('input', (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
                         scheduleLayoutLoad(selectedDate.date, true); // Preserve state when switching dates
                     });
                     slider.addEventListener('change', (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
                         loadLayout(selectedDate.date, true);
                     });
 
@@ -1220,6 +1700,7 @@
                 if (zonePicker) zonePicker.style.display = 'block';
                 if (layoutWrapper) layoutWrapper.style.display = 'none';
                 if (timelineContainer) timelineContainer.style.display = 'none';
+                updateSelectedZoneBanner();
                 isZonePickerActive = true;
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
                 const filterSection = document.getElementById('filterSection');
@@ -1264,24 +1745,26 @@
                     lastZonePickerDateId = zoneMapDates[0].date;
                     const timelineContainer = document.getElementById('timelineContainer');
                     if (timelineContainer) {
-                        timelineContainer.style.display = 'block';
+                        timelineContainer.style.display = '';
                         const slider = document.getElementById('timelineSlider');
                         slider.max = availableDates.length - 1;
                         slider.value = 0;
                         document.getElementById('timelineStart').textContent = availableDates[0].display;
                         document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                        document.getElementById('timelineCurrent').textContent = availableDates[0].display;
+                        updateTimelineCurrent(0);
                         slider.oninput = (e) => {
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
-                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            updateTimelineCurrent(index);
+                            updateSelectedZoneBanner(selectedDate.date);
                             scheduleZoneMapUpdate(selectedDate.date);
                         };
                         slider.onchange = (e) => {
                             if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                             const index = parseInt(e.target.value);
                             const selectedDate = availableDates[index];
-                            document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                            updateTimelineCurrent(index);
+                            updateSelectedZoneBanner(selectedDate.date);
                             updateZoneMapForDate(selectedDate.date);
                         };
                         renderTimelineDots();
@@ -1337,6 +1820,7 @@
 
         async function selectZone(zone) {
             selectedZone = zone;
+            updateSelectedZoneBanner();
             latestSummaryRequestKey = `${zone}|${Date.now()}`;
             const summaryRequestKey = latestSummaryRequestKey;
             const zonePicker = document.getElementById('zonePicker');
@@ -1344,7 +1828,7 @@
             const siteOverviewSection = document.getElementById('siteOverviewSection');
             const filterSection = document.getElementById('filterSection');
             if (zonePicker) zonePicker.style.display = 'none';
-            if (layoutWrapper) layoutWrapper.style.display = 'flex';
+            if (layoutWrapper) layoutWrapper.style.display = '';
             if (siteOverviewSection) siteOverviewSection.style.display = 'none';
             if (filterSection) filterSection.style.display = 'block';
             isZonePickerActive = false;
@@ -1369,24 +1853,27 @@
 
             const timelineContainer = document.getElementById('timelineContainer');
             if (availableDates.length > 1) {
-                timelineContainer.style.display = 'block';
+                timelineContainer.style.display = '';
                 const slider = document.getElementById('timelineSlider');
                 slider.max = availableDates.length - 1;
                 const preferredZoneDateIndex = Math.max(0, availableDates.findIndex(d => d.date === preferredZoneDateId));
                 slider.value = preferredZoneDateIndex;
                 document.getElementById('timelineStart').textContent = availableDates[0].display;
                 document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                document.getElementById('timelineCurrent').textContent = availableDates[preferredZoneDateIndex].display;
+                updateTimelineCurrent(preferredZoneDateIndex);
+                updateSelectedZoneBanner(preferredZoneDateId);
                 slider.oninput = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
-                    document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                    updateTimelineCurrent(index);
+                    updateSelectedZoneBanner(selectedDate.date);
                     scheduleLayoutLoad(selectedDate.date, true);
                 };
                 slider.onchange = (e) => {
                     const index = parseInt(e.target.value);
                     const selectedDate = availableDates[index];
-                    document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                    updateTimelineCurrent(index);
+                    updateSelectedZoneBanner(selectedDate.date);
                     loadLayout(selectedDate.date, true);
                 };
                 renderTimelineDots();
@@ -1408,6 +1895,8 @@
                     buildWorkingDaySeries();
                     renderManpowerTable();
                     renderDailyTable();
+                    renderRateTable();
+                    renderProductivityTable();
                     updateStageCompletionEstimates();
                     initializeCharts();
                     initializeDailyPieChart();
@@ -1425,6 +1914,7 @@
 
         function returnToZonePicker() {
             selectedZone = null;
+            updateSelectedZoneBanner();
             currentDate = null;
             availableDates = zoneMapDates;
             layoutData = null;
@@ -1437,7 +1927,7 @@
             if (zonePicker) zonePicker.style.display = 'block';
             if (layoutWrapper) layoutWrapper.style.display = 'none';
             if (timelineContainer) {
-                timelineContainer.style.display = availableDates.length > 1 ? 'block' : 'none';
+                timelineContainer.style.display = availableDates.length > 1 ? '' : 'none';
                 if (availableDates.length > 0) {
                     const slider = document.getElementById('timelineSlider');
                     const restoredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
@@ -1448,18 +1938,20 @@
                     slider.value = restoredZoneDateIndex;
                     document.getElementById('timelineStart').textContent = availableDates[0].display;
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
-                    document.getElementById('timelineCurrent').textContent = availableDates[restoredZoneDateIndex].display;
+                    updateTimelineCurrent(restoredZoneDateIndex);
                     slider.oninput = (e) => {
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
+                        updateSelectedZoneBanner(selectedDate.date);
                         scheduleZoneMapUpdate(selectedDate.date);
                     };
                     slider.onchange = (e) => {
                         if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; }
                         const index = parseInt(e.target.value);
                         const selectedDate = availableDates[index];
-                        document.getElementById('timelineCurrent').textContent = selectedDate.display;
+                        updateTimelineCurrent(index);
+                        updateSelectedZoneBanner(selectedDate.date);
                         updateZoneMapForDate(selectedDate.date);
                     };
                     renderTimelineDots();
@@ -1610,6 +2102,26 @@
         function returnToProjectSelection() {
             window.location.href = '/';
         }
+
+        function updateSelectedZoneBanner(dateOverride = null) {
+            const zoneBanner = document.getElementById('selectedZoneBanner');
+            const zoneValue = document.getElementById('selectedZoneValue');
+            const dateValue = document.getElementById('selectedDateValue');
+            if (!zoneBanner || !zoneValue || !dateValue) return;
+
+            if (HAS_ZONES && selectedZone) {
+                const selectedDateId = dateOverride || currentDate;
+                const selectedDateEntry = availableDates.find(d => d.date === selectedDateId);
+                const selectedDateLabel = selectedDateEntry?.display || selectedDateId;
+                zoneValue.textContent = `Zone: ${selectedZone}`;
+                dateValue.textContent = selectedDateLabel ? `Date: ${selectedDateLabel}` : '';
+                zoneBanner.style.display = 'block';
+            } else {
+                zoneValue.textContent = '';
+                dateValue.textContent = '';
+                zoneBanner.style.display = 'none';
+            }
+        }
         
         function setupViewTabs() {
             const tabs = document.querySelectorAll('.view-tab');
@@ -1637,11 +2149,9 @@
 
                     // Resize charts when charts view is activated
                     if (view === 'charts') {
-                        if (window.progressChartInstance) window.progressChartInstance.resize();
-                        if (window.manpowerChartInstance) window.manpowerChartInstance.resize();
-                        if (window.productivityMhMwChartInstance) window.productivityMhMwChartInstance.resize();
-                        if (window.productivityMhModChartInstance) window.productivityMhModChartInstance.resize();
-                        if (window.dailyPieChartInstance) window.dailyPieChartInstance.resize();
+                        requestAnimationFrame(() => {
+                            refreshChartsView();
+                        });
                     }
                 });
             });
@@ -1653,46 +2163,18 @@
         }
 
         function initializeManpowerConfig() {
-            manpowerConfig = {};
+            const nextConfig = {};
+            const sortedDates = getManpowerInputDates();
+            sortedDates.forEach(dateStr => {
+                nextConfig[dateStr] = cloneStageManpower(manpowerConfig[dateStr]);
+            });
+            manpowerConfig = nextConfig;
 
-            // Prefer all working days from the table series if available
-            if (tableSeries.length) {
-                tableSeries.forEach(row => {
-                    const d = new Date(row.date + 'T00:00:00');
-                    const day = d.getDay(); // 0=Sun, 6=Sat
-                    if (day === 0 || day === 6) return; // skip weekends
-
-                    if (!manpowerConfig[row.date]) {
-                        manpowerConfig[row.date] = {
-                            pile: DEFAULT_STAGE_MANPOWER.pile,
-                            torque_tube: DEFAULT_STAGE_MANPOWER.torque_tube,
-                            module_rails: DEFAULT_STAGE_MANPOWER.module_rails,
-                            solar_panel: DEFAULT_STAGE_MANPOWER.solar_panel
-                        };
-                        manpowerConfig[row.date].total =
-                            (manpowerConfig[row.date].pile || 0) +
-                            (manpowerConfig[row.date].torque_tube || 0) +
-                            (manpowerConfig[row.date].module_rails || 0) +
-                            (manpowerConfig[row.date].solar_panel || 0);
-                    }
-                });
-            } else {
-                // Fallback: just use the flight dates
-                availableDates.forEach(d => {
-                    if (!manpowerConfig[d.display]) {
-                        manpowerConfig[d.display] = {
-                            pile: DEFAULT_STAGE_MANPOWER.pile,
-                            torque_tube: DEFAULT_STAGE_MANPOWER.torque_tube,
-                            module_rails: DEFAULT_STAGE_MANPOWER.module_rails,
-                            solar_panel: DEFAULT_STAGE_MANPOWER.solar_panel
-                        };
-                        manpowerConfig[d.display].total =
-                            (manpowerConfig[d.display].pile || 0) +
-                            (manpowerConfig[d.display].torque_tube || 0) +
-                            (manpowerConfig[d.display].module_rails || 0) +
-                            (manpowerConfig[d.display].solar_panel || 0);
-                    }
-                });
+            const input = document.getElementById('manualDateInput');
+            if (input) {
+                const bounds = getAnalyticsDateBounds();
+                input.min = bounds.min || '';
+                input.max = bounds.max || '';
             }
         }
 
@@ -1755,45 +2237,48 @@
                 snapshotSeries.push(row);
             });
 
-            // Build tableSeries over all calendar days between first and last flight.
-            // Progress between flight dates is split evenly across working days (Mon–Fri),
-            // and counts are cumulative by date.
+            // If a project start date is configured and precedes the first real flight,
+            // prepend a virtual zero-completion baseline so working days from the
+            // project start are included in all derived series.
+            if (PROJECT_START_DATE && snapshotSeries.length > 0
+                    && PROJECT_START_DATE < snapshotSeries[0].date) {
+                const firstWorkingDayOnOrAfterStart = buildWorkingCalendarDates(
+                    PROJECT_START_DATE, snapshotSeries[0].date
+                )[0];
+                if (firstWorkingDayOnOrAfterStart) {
+                    snapshotSeries.unshift({
+                        date: firstWorkingDayOnOrAfterStart,
+                        perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
+                        total: 0,
+                        virtual: true
+                    });
+                }
+            }
+
+            // Build tableSeries over all configured working days between the first and
+            // last flight. Snapshot dates remain the source observations, while the
+            // working-day calendar is the derived calculation grid used by the tables.
             tableSeries = [];
             if (snapshotSeries.length > 0) {
-                const oneDayMs = 24 * 60 * 60 * 1000;
-
-                function parseDate(str) {
-                    return new Date(str + 'T00:00:00');
-                }
-
-                function isWeekend(date) {
-                    const day = date.getDay(); // 0=Sun, 6=Sat
-                    return day === 0 || day === 6;
-                }
-
                 const firstSnap = snapshotSeries[0];
                 const lastSnap = snapshotSeries[snapshotSeries.length - 1];
-                const firstDate = parseDate(firstSnap.date);
-                const lastDate = parseDate(lastSnap.date);
+                const workingCalendarDates = buildWorkingCalendarDates(firstSnap.date, lastSnap.date);
 
                 // Map of dateStr -> incremental completions for that date (floats)
                 const incrementsByDate = {};
 
-                // Distribute deltas between consecutive flight dates across working days
+                // Distribute deltas between consecutive snapshots across working days.
+                // For a virtual (project-start) baseline, include that start date itself
+                // in the distribution so it receives a proportional rate.
                 for (let i = 1; i < snapshotSeries.length; i++) {
                     const prev = snapshotSeries[i - 1];
                     const cur = snapshotSeries[i];
-                    const prevDate = parseDate(prev.date);
-                    const curDate = parseDate(cur.date);
 
-                    // Collect working days between prev and current (exclusive prev, inclusive current)
-                    const workingDates = [];
-                    for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
-                        const d = new Date(t);
-                        if (!isWeekend(d)) {
-                            workingDates.push(d);
-                        }
-                    }
+                    const isVirtualStart = prev.virtual === true;
+                    const workingDates = workingCalendarDates.filter(dateStr =>
+                        (isVirtualStart ? dateStr >= prev.date : dateStr > prev.date)
+                        && dateStr <= cur.date
+                    );
                     if (!workingDates.length) continue;
 
                     orderedStages.forEach(stageKey => {
@@ -1803,17 +2288,18 @@
                         if (delta === 0) return;
 
                         const perDay = delta / workingDates.length;
-                        workingDates.forEach(d => {
-                            const disp = d.toISOString().slice(0, 10);
-                            if (!incrementsByDate[disp]) {
-                                incrementsByDate[disp] = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
+                        workingDates.forEach(dateStr => {
+                            if (!incrementsByDate[dateStr]) {
+                                incrementsByDate[dateStr] = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
                             }
-                            incrementsByDate[disp][stageKey] += perDay;
+                            incrementsByDate[dateStr][stageKey] += perDay;
                         });
                     });
                 }
 
-                // Walk all calendar days from first to last, applying increments and storing cumulative counts
+                // Walk all working days from first to last, applying increments and storing cumulative counts.
+                // For virtual starts the cumulative begins at zero and the start date itself receives an increment.
+                const firstSnapIsVirtual = firstSnap.virtual === true;
                 let cumulative = {
                     pile: firstSnap.perStage.pile || 0,
                     torque_tube: firstSnap.perStage.torque_tube || 0,
@@ -1821,12 +2307,9 @@
                     solar_panel: firstSnap.perStage.solar_panel || 0
                 };
 
-                for (let t = firstDate.getTime(); t <= lastDate.getTime(); t += oneDayMs) {
-                    const d = new Date(t);
-                    const disp = d.toISOString().slice(0, 10);
-
-                    if (t !== firstDate.getTime()) {
-                        const inc = incrementsByDate[disp];
+                workingCalendarDates.forEach(dateStr => {
+                    if (firstSnapIsVirtual || dateStr !== firstSnap.date) {
+                        const inc = incrementsByDate[dateStr];
                         if (inc) {
                             orderedStages.forEach(stageKey => {
                                 cumulative[stageKey] += inc[stageKey] || 0;
@@ -1835,100 +2318,84 @@
                     }
 
                     tableSeries.push({
-                        date: disp,
+                        date: dateStr,
                         perStage: { ...cumulative },
                         total: 0
                     });
-                }
+                });
             }
         }
 
         function buildWorkingDaySeries() {
-            if (!availableDates.length) {
+            if (!tableSeries.length) {
                 workingDaySeries = [];
                 return;
             }
+            workingDaySeries = tableSeries.map((row, index) => {
+                const prevRow = index > 0 ? tableSeries[index - 1] : null;
+                const perStage = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
+                let total = 0;
 
-            // Precompute completed counts per date and stage (snapshot at each drone flight date)
-            const completedSnapshot = {}; // {displayDate: {stage: completedCount}}
-            availableDates.forEach(d => {
-                const disp = d.display;
-                const sum = allDateSummaries[disp];
-                completedSnapshot[disp] = {};
-                stageDefinitions.forEach(s => {
-                    completedSnapshot[disp][s.key] = sum
-                        ? (sum.stageStatusCounts[s.key]?.completed || 0)
-                        : 0;
+                stageDefinitions.forEach(stage => {
+                    const currentValue = row.perStage?.[stage.key] || 0;
+                    // Use 0 as the implicit baseline when there is no previous row
+                    // (project start = zero completions), giving the first working day
+                    // a meaningful rate rather than always forcing delta to 0.
+                    const previousValue = prevRow?.perStage?.[stage.key] ?? 0;
+                    const delta = Math.max(0, currentValue - previousValue);
+                    perStage[stage.key] = delta;
+                    total += delta;
                 });
+
+                return {
+                    date: row.date,
+                    perStage,
+                    total
+                };
             });
-
-            // Helper to parse YYYY-MM-DD into Date (local)
-            function parseDate(str) {
-                return new Date(str + 'T00:00:00');
-            }
-
-            function isWeekend(date) {
-                const day = date.getDay(); // 0=Sun, 6=Sat
-                return day === 0 || day === 6;
-            }
-
-            // Build series over all working days between flights (Mon–Fri),
-            // distributing completions evenly across working days.
-            workingDaySeries = [];
-
-            for (let i = 0; i < availableDates.length; i++) {
-                if (i === 0) continue; // no previous flight to interpolate from
-
-                const prevDisp = availableDates[i - 1].display;
-                const curDisp = availableDates[i].display;
-
-                const prevDate = parseDate(prevDisp);
-                const curDate = parseDate(curDisp);
-
-                // Collect all working days between previous and current flight (exclusive prev, inclusive current)
-                const workingDates = [];
-                const oneDayMs = 24 * 60 * 60 * 1000;
-                for (let t = prevDate.getTime() + oneDayMs; t <= curDate.getTime(); t += oneDayMs) {
-                    const d = new Date(t);
-                    if (!isWeekend(d)) {
-                        workingDates.push(new Date(d));
-                    }
-                }
-
-                if (!workingDates.length) {
-                    continue;
-                }
-
-                // Compute total delta between flights per stage
-                const perStageDelta = {};
-                stageDefinitions.forEach(s => {
-                    const cur = completedSnapshot[curDisp]?.[s.key] || 0;
-                    const prev = completedSnapshot[prevDisp]?.[s.key] || 0;
-                    const delta = Math.max(0, cur - prev);
-                    perStageDelta[s.key] = delta / workingDates.length;
-                });
-
-                // Create one row per working day
-                workingDates.forEach(d => {
-                    const dispDate = d.toISOString().slice(0, 10);
-                    const row = {
-                        date: dispDate,
-                        perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 },
-                        total: 0
-                    };
-
-                    stageDefinitions.forEach(s => {
-                        const v = perStageDelta[s.key] || 0;
-                        row.perStage[s.key] = v;
-                        row.total += v;
-                    });
-
-                    workingDaySeries.push(row);
-                });
-            }
         }
 
         // ---- Charts (ECharts) ----
+
+        function getOrCreateChartInstance(domId) {
+            const el = document.getElementById(domId);
+            if (!el || typeof echarts === 'undefined') return null;
+            return echarts.getInstanceByDom(el) || echarts.init(el);
+        }
+
+        function triggerChartRefreshIfVisible() {
+            const chartsPanel = document.getElementById('chartsView');
+            if (chartsPanel && chartsPanel.classList.contains('active')) {
+                requestAnimationFrame(() => { refreshChartsView(); });
+            }
+        }
+
+        function refreshChartsView() {
+            if (typeof echarts === 'undefined') return;
+
+            // Ensure working-day series is current before rendering charts
+            if (tableSeries.length && !workingDaySeries.length) {
+                buildWorkingDaySeries();
+            }
+
+            initializeCharts();
+            initializeDailyPieChart();
+
+            if (window.progressChartInstance) window.progressChartInstance.resize();
+            if (window.manpowerChartInstance) window.manpowerChartInstance.resize();
+            if (window.productivityMhMwChartInstance) window.productivityMhMwChartInstance.resize();
+            if (window.productivityMhModChartInstance) window.productivityMhModChartInstance.resize();
+            if (window.dailyPieChartInstance) window.dailyPieChartInstance.resize();
+
+            updateProgressChart();
+            updateManpowerChart();
+            updateProductivityChart();
+            updateDailyPieChart();
+
+            // Refresh the derived tables so Table view stays in sync too
+            renderRateTable();
+            renderProductivityTable();
+        }
 
         function initializeCharts() {
             if (typeof echarts === 'undefined') return;
@@ -1939,10 +2406,10 @@
             const productivityMhModEl = document.getElementById('productivityMhModChart');
             if (!progressEl || !manpowerEl || !productivityMhMwEl || !productivityMhModEl) return;
 
-            window.progressChartInstance = echarts.init(progressEl);
-            window.manpowerChartInstance = echarts.init(manpowerEl);
-            window.productivityMhMwChartInstance = echarts.init(productivityMhMwEl);
-            window.productivityMhModChartInstance = echarts.init(productivityMhModEl);
+            window.progressChartInstance = getOrCreateChartInstance('progressChart');
+            window.manpowerChartInstance = getOrCreateChartInstance('manpowerChart');
+            window.productivityMhMwChartInstance = getOrCreateChartInstance('productivityMhMwChart');
+            window.productivityMhModChartInstance = getOrCreateChartInstance('productivityMhModChart');
 
             setupProgressStageSelector();
             updateProgressChart();
@@ -2013,15 +2480,18 @@
         }
 
         function updateManpowerChart() {
-            if (!window.manpowerChartInstance || !availableDates.length) return;
+            if (!window.manpowerChartInstance) return;
 
-            const xDates = Object.keys(manpowerConfig).sort();
+            const xDates = workingDaySeries.length
+                ? workingDaySeries.map(row => row.date)
+                : Object.keys(manpowerConfig).sort();
+            const manpowerByDate = getForwardFilledManpowerMap(xDates);
             const series = stageDefinitions.map(stage => ({
                 name: stage.label,
                 type: 'bar',
                 stack: 'manpower',
                 emphasis: { focus: 'series' },
-                data: xDates.map(d => (manpowerConfig[d]?.[stage.key] ?? 0))
+                data: xDates.map(d => (manpowerByDate[d]?.[stage.key] ?? 0))
             }));
 
             const option = {
@@ -2034,86 +2504,104 @@
                 series
             };
 
-            window.manpowerChartInstance.setOption(option);
+            window.manpowerChartInstance.setOption(option, true);
+        }
+
+        function buildDailyProductivityRows() {
+            const xDates = workingDaySeries.map(row => row.date);
+            const manpowerByDate = getForwardFilledManpowerMap(xDates);
+
+            return workingDaySeries.map(row => {
+                const dateStr = row.date;
+                const crewConfig = manpowerByDate[dateStr] || cloneStageManpower();
+                const metrics = {};
+
+                stageDefinitions.forEach(stage => {
+                    const crew = crewConfig[stage.key] || 0;
+                    const rate = row.perStage?.[stage.key] || 0;
+                    const mh = crew * HOURS_PER_DAY;
+                    const mwCompleted = rate * MW_PER_TRACKER;
+                    const modulesCompleted = rate * MODULES_PER_TRACKER;
+
+                    metrics[stage.key] = {
+                        crew,
+                        rate,
+                        mh,
+                        mhPerTracker: rate > 0 ? mh / rate : null,
+                        mhPerMw: mwCompleted > 0 ? mh / mwCompleted : null,
+                        mhPerMod: modulesCompleted > 0 ? mh / modulesCompleted : null
+                    };
+                });
+
+                return {
+                    date: dateStr,
+                    metrics
+                };
+            });
+        }
+
+        function renderRateTable() {
+            const body = document.getElementById('rateTableBody');
+            if (!body) return;
+            body.innerHTML = '';
+
+            workingDaySeries.forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.perStage.pile)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.perStage.torque_tube)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.perStage.module_rails)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.perStage.solar_panel)}</td>
+                `;
+                body.appendChild(tr);
+            });
+        }
+
+        function renderProductivityTable() {
+            const body = document.getElementById('productivityTableBody');
+            if (!body) return;
+            body.innerHTML = '';
+
+            buildDailyProductivityRows().forEach(row => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${row.date}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.metrics.pile.mhPerTracker)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.metrics.torque_tube.mhPerTracker)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.metrics.module_rails.mhPerTracker)}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">${formatNumericValue(row.metrics.solar_panel.mhPerTracker)}</td>
+                `;
+                body.appendChild(tr);
+            });
         }
 
         function updateProductivityChart() {
-            if (!window.productivityMhMwChartInstance || !window.productivityMhModChartInstance || !workingDaySeries.length) return;
+            if (!window.productivityMhMwChartInstance || !window.productivityMhModChartInstance) return;
 
-            const xDates = workingDaySeries.map(r => r.date);
+            const productivityRows = buildDailyProductivityRows();
+            const xDates = productivityRows.map(row => row.date);
+            if (!xDates.length) {
+                window.productivityMhMwChartInstance.clear();
+                window.productivityMhModChartInstance.clear();
+                return;
+            }
 
-            // Build per-date total manpower, forward-filling between specified dates
-            const manpowerTotalByDate = {};
-            let lastKnown = 0;
-            xDates.forEach(dateStr => {
-                const cfg = manpowerConfig[dateStr] || {};
-                let totalVal;
-                if (typeof cfg.total === 'number') {
-                    totalVal = cfg.total;
-                } else {
-                    totalVal = stageDefinitions.reduce(
-                        (acc, s) => acc + (cfg[s.key] || 0),
-                        0
-                    );
-                }
-                if (typeof totalVal === 'number' && !isNaN(totalVal)) {
-                    lastKnown = totalVal;
-                }
-                manpowerTotalByDate[dateStr] = lastKnown;
-            });
-
-            // For each stage, compute MH/MW and MH/mod per day
             const mhMwSeries = [];
             const mhModSeries = [];
 
             stageDefinitions.forEach(stage => {
-                const mhMw = [];
-                const mhMod = [];
-
-                xDates.forEach(dateStr => {
-                    const totalPeople = manpowerTotalByDate[dateStr] || 0;
-                    const workingRow = workingDaySeries.find(r => r.date === dateStr);
-                    const perStageCompletions = workingRow?.perStage || {};
-
-                    const stageCompletions = perStageCompletions[stage.key] || 0;
-                    const totalStageCompletions = stageDefinitions.reduce(
-                        (acc, s) => acc + (perStageCompletions[s.key] || 0),
-                        0
-                    );
-
-                    // Allocate total manpower to stages in proportion to completions that day
-                    const people = totalStageCompletions > 0
-                        ? totalPeople * (stageCompletions / totalStageCompletions)
-                        : 0;
-
-                    const mh = people * HOURS_PER_DAY;
-
-                    const completions = stageCompletions;
-                    // Convert module completions to MW using module wattage (W) and modules per tracker
-                    const mwCompleted = completions * MODULES_PER_TRACKER * MODULE_WATTAGE / 1_000_000;
-                    const modulesCompleted = completions * MODULES_PER_TRACKER;
-
-                    const mhPerMwRaw = mwCompleted > 0 ? mh / mwCompleted : 0;
-                    const mhPerModRaw = modulesCompleted > 0 ? mh / modulesCompleted : 0;
-
-                    const mhPerMw = Math.round(mhPerMwRaw);
-                    const mhPerMod = Math.round(mhPerModRaw);
-
-                    mhMw.push(mhPerMw);
-                    mhMod.push(mhPerMod);
-                });
-
                 mhMwSeries.push({
                     name: `${stage.label} MH/MW`,
                     type: 'line',
                     smooth: true,
-                    data: mhMw
+                    data: productivityRows.map(row => row.metrics[stage.key].mhPerMw == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMw)))
                 });
                 mhModSeries.push({
                     name: `${stage.label} MH/mod`,
                     type: 'line',
                     smooth: true,
-                    data: mhMod
+                    data: productivityRows.map(row => row.metrics[stage.key].mhPerMod == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMod)))
                 });
             });
 
@@ -2137,8 +2625,8 @@
                 series: mhModSeries
             };
 
-            window.productivityMhMwChartInstance.setOption(optionMhMw);
-            window.productivityMhModChartInstance.setOption(optionMhMod);
+            window.productivityMhMwChartInstance.setOption(optionMhMw, true);
+            window.productivityMhModChartInstance.setOption(optionMhMod, true);
         }
 
         function renderManpowerTable() {
@@ -2147,24 +2635,24 @@
             body.innerHTML = '';
 
             Object.keys(manpowerConfig).sort().forEach(dateStr => {
-                const cfg = manpowerConfig[dateStr];
-                const pile = cfg?.pile ?? 0;
-                const torque = cfg?.torque_tube ?? 0;
-                const rails = cfg?.module_rails ?? 0;
-                const mods = cfg?.solar_panel ?? 0;
-                const total = pile + torque + rails + mods;
+                const cfg = cloneStageManpower(manpowerConfig[dateStr]);
+                const pile = cfg.pile;
+                const torque = cfg.torque_tube;
+                const rails = cfg.module_rails;
+                const mods = cfg.solar_panel;
+                const total = cfg.total;
+                const isManualRow = manualDates.includes(dateStr);
 
-                // Ensure config stays in sync with what we render
-                if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
-                manpowerConfig[dateStr].pile = pile;
-                manpowerConfig[dateStr].torque_tube = torque;
-                manpowerConfig[dateStr].module_rails = rails;
-                manpowerConfig[dateStr].solar_panel = mods;
-                manpowerConfig[dateStr].total = total;
+                manpowerConfig[dateStr] = cfg;
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">${dateStr}</td>
+                    <td style="padding:4px 6px; border-bottom:1px solid #eee;">
+                        <div style="display:flex; align-items:center; gap:6px; justify-content:space-between;">
+                            <span>${dateStr}${isManualRow ? ' (manual)' : ''}</span>
+                            ${isManualRow ? `<button type="button" class="secondary-btn remove-manual-date-btn" data-date="${dateStr}" style="padding:2px 6px; font-size:11px;">Remove</button>` : ''}
+                        </div>
+                    </td>
                     <td style="padding:4px 6px; border-bottom:1px solid #eee; text-align:right;">
                         <input type="number" min="0" value="${pile}"
                                data-date="${dateStr}" data-key="pile"
@@ -2193,12 +2681,27 @@
                 body.appendChild(tr);
             });
 
+            body.querySelectorAll('.remove-manual-date-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    const dateStr = button.dataset.date;
+                    manualDates = manualDates.filter(value => value !== dateStr);
+                    delete manpowerConfig[dateStr];
+                    initializeManpowerConfig();
+                    renderManpowerTable();
+                    updateManpowerChart();
+                    updateProductivityChart();
+                    renderProductivityTable();
+                    scheduleManpowerSave();
+                    setManpowerStatus(`Removed manual date ${dateStr}.`);
+                });
+            });
+
             body.querySelectorAll('input[type="number"]').forEach(input => {
                 input.addEventListener('change', (e) => {
                     const dateStr = e.target.dataset.date;
                     const key = e.target.dataset.key;
                     const val = parseFloat(e.target.value) || 0;
-                    if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = {};
+                    if (!manpowerConfig[dateStr]) manpowerConfig[dateStr] = cloneStageManpower();
                     manpowerConfig[dateStr][key] = val;
 
                     // Recompute total from per-stage values and update display cell
@@ -2218,27 +2721,45 @@
                     // Update charts immediately
                     updateManpowerChart();
                     updateProductivityChart();
+                    renderProductivityTable();
+                    triggerChartRefreshIfVisible();
+                    scheduleManpowerSave();
                 });
             });
 
             // Wire global parameter inputs
+            const hoursInput = document.getElementById('hoursPerDayInput');
             const mwInput = document.getElementById('mwPerTrackerInput');
             const modInput = document.getElementById('modulesPerTrackerInput');
-            if (mwInput) {
-                mwInput.value = MODULE_WATTAGE.toString();
-                mwInput.addEventListener('change', (e) => {
+            if (hoursInput) {
+                hoursInput.value = HOURS_PER_DAY.toString();
+                hoursInput.onchange = (e) => {
                     const v = parseFloat(e.target.value);
-                    MODULE_WATTAGE = isNaN(v) || v < 0 ? 0 : v;
+                    HOURS_PER_DAY = isNaN(v) || v < 0 ? 0 : v;
                     updateProductivityChart();
-                });
+                    renderProductivityTable();
+                    triggerChartRefreshIfVisible();
+                };
+            }
+            if (mwInput) {
+                mwInput.value = MW_PER_TRACKER.toString();
+                mwInput.onchange = (e) => {
+                    const v = parseFloat(e.target.value);
+                    MW_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
+                    updateProductivityChart();
+                    renderProductivityTable();
+                    triggerChartRefreshIfVisible();
+                };
             }
             if (modInput) {
                 modInput.value = MODULES_PER_TRACKER.toString();
-                modInput.addEventListener('change', (e) => {
+                modInput.onchange = (e) => {
                     const v = parseFloat(e.target.value);
                     MODULES_PER_TRACKER = isNaN(v) || v < 0 ? 0 : v;
                     updateProductivityChart();
-                });
+                    renderProductivityTable();
+                    triggerChartRefreshIfVisible();
+                };
             }
         }
 
@@ -2248,7 +2769,7 @@
             const selectEl = document.getElementById('dailyPieDateSelect');
             if (!pieEl || !selectEl) return;
 
-            window.dailyPieChartInstance = echarts.init(pieEl);
+            window.dailyPieChartInstance = getOrCreateChartInstance('dailyPieChart');
 
             // Populate date dropdown
             selectEl.innerHTML = '';
@@ -2264,9 +2785,12 @@
                 updateDailyPieChart();
             }
 
-            selectEl.addEventListener('change', () => {
-                updateDailyPieChart();
-            });
+            if (selectEl.dataset.bound !== 'true') {
+                selectEl.dataset.bound = 'true';
+                selectEl.addEventListener('change', () => {
+                    updateDailyPieChart();
+                });
+            }
         }
 
         function updateDailyPieChart() {
@@ -2359,13 +2883,12 @@
             }
             if (startIdx === -1) return null;
 
-            // Count working days (Mon–Fri) from startIdx to last index (inclusive)
+            // Count configured working days from startIdx to last index (inclusive)
             let workingDays = 0;
             for (let i = startIdx; i < tableSeries.length; i++) {
                 const dateStr = tableSeries[i].date;
-                const d = new Date(dateStr + 'T00:00:00');
-                const day = d.getDay(); // 0=Sun, 6=Sat
-                if (day !== 0 && day !== 6) {
+                const d = parseLocalIsoDate(dateStr);
+                if (isConfiguredWorkingDay(d)) {
                     workingDays += 1;
                 }
             }
@@ -2381,17 +2904,15 @@
 
             const neededWorkingDays = Math.ceil(remaining / ratePerWorkingDay);
 
-            // Add working days forward from lastRow.date, skipping weekends
-            let d = new Date(lastRow.date + 'T00:00:00');
+            // Add working days forward from lastRow.date using project working days
+            let d = parseLocalIsoDate(lastRow.date);
             let remainingDays = neededWorkingDays;
-            const oneDayMs = 24 * 60 * 60 * 1000;
             while (remainingDays > 0) {
-                d = new Date(d.getTime() + oneDayMs);
-                const day = d.getDay();
-                if (day === 0 || day === 6) continue;
+                d = addLocalDays(d, 1);
+                if (!isConfiguredWorkingDay(d)) continue;
                 remainingDays -= 1;
             }
-            return d.toISOString().slice(0, 10);
+            return formatLocalIsoDate(d);
         }
 
         function updateStageCompletionEstimates() {
@@ -2449,7 +2970,8 @@
                 tableBody.querySelectorAll('input[type="date"]').forEach(input => {
                     input.addEventListener('change', (e) => {
                         const sKey = e.target.dataset.stage;
-                        actualStageDates[sKey] = e.target.value;
+                        actualStageDates[sKey] = normalizeIsoDate(e.target.value);
+                        scheduleManpowerSave();
                     });
                 });
             }
@@ -2558,6 +3080,7 @@
                     return;
                 }
                 currentDate = dateStr;
+                updateSelectedZoneBanner();
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
                 if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) {
                     console.log('[ClientCache] Skipping duplicate layout reload', { requestedLayoutKey });
@@ -2569,7 +3092,7 @@
                     const dateIndex = availableDates.findIndex(d => d.date === dateStr);
                     if (dateIndex >= 0) {
                         document.getElementById('timelineSlider').value = dateIndex;
-                        document.getElementById('timelineCurrent').textContent = availableDates[dateIndex].display;
+                        updateTimelineCurrent(dateIndex);
                     }
                 }
                 
@@ -2699,12 +3222,9 @@
                         if (preserveState && canvas && canvasWrapper && ctx) {
                             // Just update the canvas image and redraw
                             // Need to recalculate canvas size if image dimensions changed
-                            const timelineContainer = document.getElementById('timelineContainer');
-                            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
-                                ? timelineContainer.offsetHeight : 0;
-                            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
-                            const containerWidth = document.getElementById('layoutContainer').clientWidth - 40;
-                            const containerHeight = Math.max(availableHeight, 400);
+                            const container = document.getElementById('layoutContainer');
+                            const containerWidth = Math.max(container.clientWidth - 16, 320);
+                            const containerHeight = Math.max(container.clientHeight - 16, 400);
                             
                             const imgAspect = img.width / img.height;
                             const containerAspect = containerWidth / containerHeight;
@@ -2804,16 +3324,10 @@
             canvas = document.createElement('canvas');
             ctx = canvas.getContext('2d');
             
-            // Calculate scale to fill available space better
-            const timelineContainer = document.getElementById('timelineContainer');
-            const timelineHeight = timelineContainer && timelineContainer.style.display !== 'none' 
-                ? timelineContainer.offsetHeight : 0;
-            
-            // Get available space - use viewport height minus header, padding, and timeline
-            // Header: 80px, Main-view padding: 20px (top only, bottom is 0), Timeline: timelineHeight
-            const availableHeight = window.innerHeight - 80 - 20 - timelineHeight;
-            const containerWidth = container.clientWidth - 40;
-            const containerHeight = Math.max(availableHeight, 400); // Minimum 400px height
+            // Size the canvas from the actual panel bounds so it fills the
+            // remaining layout area without relying on viewport guesses.
+            const containerWidth = Math.max(container.clientWidth - 16, 320);
+            const containerHeight = Math.max(container.clientHeight - 16, 400);
             
             // Calculate aspect ratios
             const imgAspect = img.width / img.height;
@@ -2980,21 +3494,44 @@
         }
         
         function updateTimelineWidth() {
-            const canvas = document.getElementById('layoutCanvas');
             const timelineContainer = document.getElementById('timelineContainer');
-            const layoutView = document.querySelector('.layout-view');
-            if (canvas && timelineContainer && layoutView) {
-                // Make timeline extend across the full canvas width (with some padding)
-                const mainViewRect = document.querySelector('.main-view').getBoundingClientRect();
-                const canvasRect = canvas.getBoundingClientRect();
-                
-                // Use full canvas width with small padding on sides
-                const timelineWidth = canvas.width * 0.95; // 95% of canvas width
-                const leftPosition = canvasRect.left - mainViewRect.left + (canvas.width * 0.025); // 2.5% padding on left
-                
-                timelineContainer.style.left = leftPosition + 'px';
-                timelineContainer.style.width = timelineWidth + 'px';
+            if (timelineContainer) {
+                timelineContainer.style.left = '0';
+                timelineContainer.style.width = '100%';
             }
+        }
+
+        function updateTimelineCurrent(index = null) {
+            const slider = document.getElementById('timelineSlider');
+            const currentEl = document.getElementById('timelineCurrent');
+            if (!slider || !currentEl || !availableDates.length) return;
+
+            const numericIndex = index === null ? parseInt(slider.value || '0', 10) : index;
+            const safeIndex = Math.max(
+                0,
+                Math.min(Number.isFinite(numericIndex) ? numericIndex : 0, availableDates.length - 1)
+            );
+            const selectedDate = availableDates[safeIndex];
+            currentEl.textContent = selectedDate.display;
+
+            const sliderWidth = slider.clientWidth || 0;
+            if (!sliderWidth) {
+                currentEl.style.visibility = 'hidden';
+                requestAnimationFrame(() => updateTimelineCurrent(safeIndex));
+                return;
+            }
+
+            const thumbWidth = 16;
+            const maxIndex = Math.max(availableDates.length - 1, 1);
+            const usableWidth = Math.max(sliderWidth - thumbWidth, 0);
+            const rawLeft = (thumbWidth / 2) + ((safeIndex / maxIndex) * usableWidth);
+            const labelHalfWidth = currentEl.offsetWidth / 2;
+            const minLeft = labelHalfWidth;
+            const maxLeft = Math.max(sliderWidth - labelHalfWidth, minLeft);
+            const clampedLeft = Math.min(Math.max(rawLeft, minLeft), maxLeft);
+
+            currentEl.style.left = `${clampedLeft}px`;
+            currentEl.style.visibility = 'visible';
         }
 
         function renderTimelineDots() {
@@ -3012,6 +3549,7 @@
         
         function updateTimelinePosition() {
             updateTimelineWidth();
+            updateTimelineCurrent();
         }
         
         // Convert lat/lon boundaries to canvas pixel coordinates
