@@ -1,4 +1,4 @@
-name: Build and deploy Python app to Azure Web App - droneprogressviewer-dev
+name: Build Python app for dev branch
 
 on:
   push:
@@ -26,48 +26,3 @@ jobs:
           source antenv/bin/activate
           pip install -r requirements.txt
 
-      - name: Upload artifact for deployment jobs
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-app
-          path: |
-            .
-            !antenv/
-            !.git/
-            !__pycache__/
-            !.venv/
-
-  deploy:
-    runs-on: ubuntu-latest
-    needs: build
-    permissions:
-      id-token: write
-      contents: read
-
-    steps:
-      - name: Download artifact from build job
-        uses: actions/download-artifact@v4
-        with:
-          name: python-app
-          path: python-app
-
-      - name: Login to Azure
-        uses: azure/login@v2
-        with:
-          client-id: ${{ secrets.AZUREAPPSERVICE_CLIENTID_18847EEF6ECB452A9CB615D17213CA24 }}
-          tenant-id: ${{ secrets.AZUREAPPSERVICE_TENANTID_DC7CA9EAF5224E038FF0717997D167CD }}
-          subscription-id: ${{ secrets.AZUREAPPSERVICE_SUBSCRIPTIONID_BF67602486FE4C8DA90849AE4AED4B20 }}
-
-      - name: Wait for app to be ready
-        run: |
-          echo "Waiting 30 seconds to ensure app is stable before deployment..."
-          sleep 30
-
-      - name: 'Deploy to Azure Web App'
-        uses: azure/webapps-deploy@v3
-        id: deploy-to-webapp
-        with:
-          app-name: 'droneprogressviewer'
-          slot-name: 'Production'
-          package: python-app
-          startup-command: 'gunicorn --bind=0.0.0.0 --timeout 600 --workers 2 app:app'

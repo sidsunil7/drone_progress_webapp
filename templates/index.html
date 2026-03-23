@@ -1233,7 +1233,7 @@
                     blockMapBgLoaded = false;
                     resolve(null);
                 };
-                img.src = '/api/block_map_bg';
+                img.src = `/api/block_map_bg?project=${encodeURIComponent(PROJECT)}`;
             });
         }
         let layoutLoadTimer = null;
@@ -1774,6 +1774,31 @@
                     timelineContainer.style.display = 'none';
                 }
 
+                // Populate charts/tables with site-level data without requiring
+                // the user to select a zone first.
+                (async () => {
+                    const summaryStart = performance.now();
+                    try {
+                        await computeAllDateSummaries();
+                        initializeManpowerConfig();
+                        buildWorkingDaySeries();
+                        renderManpowerTable();
+                        renderDailyTable();
+                        renderRateTable();
+                        renderProductivityTable();
+                        updateStageCompletionEstimates();
+                        initializeCharts();
+                        initializeDailyPieChart();
+                        const summaryMs = performance.now() - summaryStart;
+                        console.log(
+                            `[MapTiming] site-summary-build: ${(summaryMs / 1000).toFixed(3)}s (${summaryMs.toFixed(1)}ms)`,
+                            { dates: zoneMapDates.length }
+                        );
+                    } catch (err) {
+                        console.error('Site-level summary build failed:', err);
+                    }
+                })();
+
                 const initElapsed = performance.now() - initStart;
                 console.log(`[MapTiming] initZoneProject: ${(initElapsed / 1000).toFixed(3)}s (${initElapsed.toFixed(1)}ms)`,
                     { zones: (zoneMeta?.zones || []).length, dates: zoneMapDates.length });
@@ -1970,6 +1995,24 @@
             if (availableDates.length > 0) {
                 renderSiteOverviewTable(lastZonePickerDateId || availableDates[0].date);
             }
+
+            // Refresh charts/tables back to site-level data.
+            (async () => {
+                try {
+                    await computeAllDateSummaries();
+                    initializeManpowerConfig();
+                    buildWorkingDaySeries();
+                    renderManpowerTable();
+                    renderDailyTable();
+                    renderRateTable();
+                    renderProductivityTable();
+                    updateStageCompletionEstimates();
+                    initializeCharts();
+                    initializeDailyPieChart();
+                } catch (err) {
+                    console.error('Site-level summary refresh failed:', err);
+                }
+            })();
 
             const mapTab = document.querySelector('.view-tab[data-view="map"]');
             if (mapTab) {
@@ -3005,7 +3048,10 @@
 
         function getDateSummaryUrl(dateStr) {
             if (HAS_ZONES && selectedZone) {
-                return `/api/date_summary/${dateStr}?zone=${encodeURIComponent(selectedZone)}`;
+                return `/api/date_summary/${dateStr}?zone=${encodeURIComponent(selectedZone)}&project=${encodeURIComponent(PROJECT)}`;
+            }
+            if (HAS_ZONES) {
+                return `/api/site_date_summary/${dateStr}?project=${encodeURIComponent(PROJECT)}`;
             }
             return `/api/date_summary/${dateStr}`;
         }

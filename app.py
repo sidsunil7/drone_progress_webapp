@@ -2616,6 +2616,52 @@ def get_block_map_bg():
     return response
 
 
+@app.route('/api/site_date_summary/<date_str>')
+def get_site_date_summary(date_str):
+    """Return site-level summary aggregated across all zones for a date.
+    Returns the same shape as /api/date_summary so the frontend charts/tables
+    work without requiring a zone selection."""
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+
+    agg_tracker_stages = []
+    agg_stage_status_counts = {}
+    total_trackers = 0
+
+    for zone in available_zones:
+        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_str, dir_sig)
+        if not best:
+            continue
+        date_folder_path = best[1]
+        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        if not csv_path or not os.path.exists(csv_path):
+            continue
+        csv_sig = get_file_signature(csv_path)
+        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+        total_trackers += len(tracker_info)
+        for info in tracker_info.values():
+            stage_key = (info.get("stage") or "").lower().replace(" ", "_")
+            status_key = (info.get("status") or "").lower().replace(" ", "_")
+            if stage_key:
+                agg_tracker_stages.append({"stage": stage_key, "status": status_key})
+            if stage_key not in agg_stage_status_counts:
+                agg_stage_status_counts[stage_key] = {}
+            agg_stage_status_counts[stage_key][status_key] = (
+                agg_stage_status_counts[stage_key].get(status_key, 0) + 1
+            )
+
+    summary = {
+        "stageStatusCounts": agg_stage_status_counts,
+        "totalTrackers": total_trackers,
+        "trackerStages": agg_tracker_stages,
+    }
+    log_timing("get_site_date_summary", request_start, project=project, date=date_str, zones=len(available_zones))
+    return jsonify(summary)
+
+
 @app.route('/api/zone_dates')
 @app.route('/api/sonrisa/dates')
 def get_zone_dates():
