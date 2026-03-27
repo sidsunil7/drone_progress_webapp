@@ -97,6 +97,8 @@ def optional_file_signature(file_path):
     return get_file_signature(file_path)
 
 
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
@@ -221,6 +223,19 @@ def get_tracker_boundaries_cached(json_path, json_sig):
 @lru_cache(maxsize=256)
 def get_tracker_info_cached(csv_path, csv_sig):
     return load_tracker_info(csv_path)
+
+
+@lru_cache(maxsize=256)
+def get_tracker_info_json_cached(json_path, json_sig):
+    return load_tracker_info_json(json_path)
+
+
+def get_tracker_info_from_sources(csv_path, csv_sig, status_json_path, status_json_sig):
+    if csv_path and csv_sig != (0, 0):
+        return get_tracker_info_cached(csv_path, csv_sig)
+    if status_json_path and status_json_sig != (0, 0):
+        return get_tracker_info_json_cached(status_json_path, status_json_sig)
+    return {}
 
 
 @lru_cache(maxsize=256)
@@ -365,10 +380,14 @@ def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
     result = {}
     for zone, folder_path in folder_zone_map.items():
         csv_path = find_sonrisa_zone_csv(folder_path, zone)
-        if not csv_path or not os.path.exists(csv_path):
+        status_json_path = find_sonrisa_zone_status_json(folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
             continue
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         counts = {}
         for info in tracker_info.values():
             stage = (info.get("stage") or "").lower().replace(" ", "_")
@@ -445,10 +464,14 @@ def _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig):
             continue
         _, folder_path = best
         csv_path = find_sonrisa_zone_csv(folder_path, zone)
-        if not csv_path or not os.path.exists(csv_path):
+        status_json_path = find_sonrisa_zone_status_json(folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
             continue
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         counts = {}
         for info in tracker_info.values():
             stage = (info.get("stage") or "").lower().replace(" ", "_")
@@ -1248,6 +1271,51 @@ def find_sonrisa_zone_csv(date_folder_path, zone):
     return csv_path
 
 
+def find_sonrisa_zone_status_json(date_folder_path, zone):
+    if not date_folder_path or not zone:
+        return None
+    json_names = ["zone_status.json", "tracker_status.json"]
+    trackers_root = os.path.join(date_folder_path, "trackers")
+    zone_folder_aliases = get_zone_folder_aliases(zone)
+
+    if os.path.isdir(trackers_root):
+        for alias in zone_folder_aliases:
+            for name in json_names:
+                candidate = os.path.join(trackers_root, alias, name)
+                if os.path.exists(candidate):
+                    return candidate
+        for entry in os.listdir(trackers_root):
+            for name in json_names:
+                candidate = os.path.join(trackers_root, entry, name)
+                if os.path.exists(candidate):
+                    return candidate
+
+    if os.path.isdir(date_folder_path):
+        for alias in zone_folder_aliases:
+            zone_subdirs = []
+            if alias.lower().startswith("zone_"):
+                zone_subdirs.append(alias)
+            else:
+                suffix = alias[1:]
+                zone_subdirs.extend([f"Zone_{suffix}", f"zone_{suffix}"])
+            for zone_subdir in zone_subdirs:
+                for name in json_names:
+                    candidate = os.path.join(date_folder_path, zone_subdir, name)
+                    if os.path.exists(candidate):
+                        return candidate
+        for entry in os.listdir(date_folder_path):
+            entry_path = os.path.join(date_folder_path, entry)
+            if not os.path.isdir(entry_path):
+                continue
+            if re.match(r"^Zone_(\d{1,2})$", entry, re.IGNORECASE):
+                for name in json_names:
+                    candidate = os.path.join(entry_path, name)
+                    if os.path.exists(candidate):
+                        return candidate
+
+    return None
+
+
 def get_sonrisa_zone_stage(project_layout_dir, zone, date_id=None):
     date_folders = []
     if date_id:
@@ -1270,10 +1338,14 @@ def get_sonrisa_zone_stage(project_layout_dir, zone, date_id=None):
     counts = {}
     for folder in date_folders:
         csv_path = find_sonrisa_zone_csv(folder, zone)
-        if not csv_path or not os.path.exists(csv_path):
+        status_json_path = find_sonrisa_zone_status_json(folder, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
             continue
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         for info in tracker_info.values():
             stage = (info.get("stage") or "").lower().replace(" ", "_")
             if not stage:
@@ -1624,6 +1696,23 @@ def load_tracker_info(csv_path):
     return tracker_info
 
 
+def load_tracker_info_json(json_path):
+    """Load tracker stage and status from zone_status.json."""
+    tracker_info = {}
+    if not json_path or not os.path.exists(json_path):
+        return tracker_info
+    data = read_json_file(json_path, default={})
+    trackers = data.get("trackers", {})
+    if not isinstance(trackers, dict):
+        return tracker_info
+    for tracker_id, row in trackers.items():
+        if not tracker_id or not isinstance(row, dict):
+            continue
+        stage, status = compute_current_stage_from_installation_row(row)
+        tracker_info[tracker_id] = {"stage": stage, "status": status}
+    return tracker_info
+
+
 def _persist_current_stage_to_csv(csv_path, fieldnames, rows_with_computed):
     """Write CSV with Current_stage and Status columns added. Preserves existing columns."""
     if "Current_stage" not in fieldnames:
@@ -1755,6 +1844,8 @@ def build_sonrisa_layout_response_cached(
     json_sig,
     csv_path,
     csv_sig,
+    status_json_path,
+    status_json_sig,
     web_path,
     web_sig,
 ):
@@ -1781,9 +1872,11 @@ def build_sonrisa_layout_response_cached(
     )
 
     tracker_info = {}
-    if csv_path and csv_sig != (0, 0):
+    tracker_info_raw = get_tracker_info_from_sources(
+        csv_path, csv_sig, status_json_path, status_json_sig
+    )
+    if tracker_info_raw:
         tracker_info_start = time.perf_counter()
-        tracker_info_raw = get_tracker_info_cached(csv_path, csv_sig)
         for tracker_id, info in tracker_info_raw.items():
             normalized_id = normalize_tracker_id(tracker_id)
             if normalized_id:
@@ -1933,11 +2026,11 @@ def build_default_layout_response_cached(
 
 
 @lru_cache(maxsize=256)
-def build_date_summary_cached(csv_path, csv_sig):
-    """Build lightweight per-date summary data from tracker CSV only."""
-    tracker_info = {}
-    if csv_path and csv_sig != (0, 0):
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
+def build_date_summary_cached(csv_path, csv_sig, status_json_path, status_json_sig):
+    """Build lightweight per-date summary data from tracker status files."""
+    tracker_info = get_tracker_info_from_sources(
+        csv_path, csv_sig, status_json_path, status_json_sig
+    )
 
     summary = {
         "stageStatusCounts": {},
@@ -2079,9 +2172,13 @@ def get_date_summary(date_str):
         if not date_folder_path:
             return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
         csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
         calc_start = time.perf_counter()
-        summary = build_date_summary_cached(csv_path or "", csv_sig)
+        summary = build_date_summary_cached(
+            csv_path or "", csv_sig, status_json_path or "", status_json_sig
+        )
         log_timing(
             "date_summary_calc",
             calc_start,
@@ -2114,7 +2211,9 @@ def get_date_summary(date_str):
     csv_path = os.path.join(date_folder_path, f"{date_match}_tracker_stages.csv")
     csv_sig = optional_file_signature(csv_path)
     calc_start = time.perf_counter()
-    summary = build_date_summary_cached(csv_path if csv_sig != (0, 0) else "", csv_sig)
+    summary = build_date_summary_cached(
+        csv_path if csv_sig != (0, 0) else "", csv_sig, "", (0, 0)
+    )
     log_timing(
         "date_summary_calc",
         calc_start,
@@ -2218,6 +2317,7 @@ def get_layout_data(date_str):
         # Load JSON and CSV
         json_path = get_zone_json_path(project_layout_dir)
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
 
         if not json_path or not os.path.exists(json_path):
             return jsonify({'error': 'JSON file not found'}), 404
@@ -2229,6 +2329,7 @@ def get_layout_data(date_str):
 
         json_sig = get_file_signature(json_path)
         csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
 
         if not zone_tif or 'web_path' not in dir() or not web_path:
             web_path = get_or_create_sonrisa_web_jpg(
@@ -2243,6 +2344,7 @@ def get_layout_data(date_str):
             tif_sig,
             json_sig,
             csv_sig,
+            status_json_sig,
             web_sig,
         )
         if request_etag_matches(layout_etag):
@@ -2258,6 +2360,8 @@ def get_layout_data(date_str):
             json_sig,
             csv_path or "",
             csv_sig,
+            status_json_path or "",
+            status_json_sig,
             web_path or "",
             web_sig,
         )
@@ -2644,10 +2748,14 @@ def get_site_date_summary(date_str):
             continue
         date_folder_path = best[1]
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        if not csv_path or not os.path.exists(csv_path):
+        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
             continue
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         total_trackers += len(tracker_info)
         for info in tracker_info.values():
             stage_key = (info.get("stage") or "").lower().replace(" ", "_")
@@ -2685,7 +2793,7 @@ def get_zone_dates():
 @app.route('/api/site_overview')
 @app.route('/api/sonrisa/site_overview')
 def get_site_overview():
-    """Return site-level zone summary (total, completed, %) for a date. CSV-only, no TIFFs."""
+    """Return site-level zone summary (total, completed, %) for a date. Status-only, no TIFFs."""
     request_start = time.perf_counter()
     project = get_project_from_request()
     date_id = request.args.get("date")
@@ -2719,10 +2827,14 @@ def get_site_overview():
             continue
         date_folder_path = best[1]
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        if not csv_path or not os.path.exists(csv_path):
+        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
             continue
-        csv_sig = get_file_signature(csv_path)
-        tracker_info = get_tracker_info_cached(csv_path, csv_sig)
         total = len(tracker_info)
         completed = 0
         for info in tracker_info.values():
