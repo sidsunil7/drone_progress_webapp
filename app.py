@@ -184,27 +184,33 @@ def atomic_write_json(file_path, payload):
 @lru_cache(maxsize=64)
 def derive_project_tracker_defaults_cached(json_path, json_sig):
     if not json_path or not os.path.exists(json_path):
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": None}
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": None}
 
     try:
         data = read_json_file(json_path, default={})
     except Exception:
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": os.path.basename(json_path)}
 
-    for table in data.get("tableDetails", []):
+    table_details = data.get("tableDetails", [])
+    total_project_trackers = len(table_details)
+
+    mw_per_tracker = None
+    modules_per_tracker = None
+    for table in table_details:
         module_wattage = safe_float(table.get("moduleWattage"))
         string_size = safe_float(table.get("stringSize"))
         string_qty = safe_float(table.get("stringQty"))
         if module_wattage and string_size and string_qty:
             modules_per_tracker = int(round(string_size * string_qty))
             mw_per_tracker = round((module_wattage * string_size * string_qty) / 1_000_000, 6)
-            return {
-                "mw_per_tracker": mw_per_tracker,
-                "modules_per_tracker": modules_per_tracker,
-                "project_json_path": os.path.basename(json_path),
-            }
+            break
 
-    return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
+    return {
+        "mw_per_tracker": mw_per_tracker,
+        "modules_per_tracker": modules_per_tracker,
+        "total_project_trackers": total_project_trackers if total_project_trackers > 0 else None,
+        "project_json_path": os.path.basename(json_path),
+    }
 
 
 @lru_cache(maxsize=128)
@@ -833,6 +839,7 @@ def build_project_settings_response(project_name):
         "updated_at": stored.get("updated_at"),
         "settings_exists": os.path.exists(settings_path),
         "project_json_path": derived.get("project_json_path"),
+        "total_project_trackers": derived.get("total_project_trackers"),
     }
     return settings
 
@@ -2597,7 +2604,7 @@ def get_block_map_bg():
         response = make_response(img_bytes)
         response.headers["Content-Type"] = content_type
         response.headers["Content-Length"] = str(len(img_bytes))
-        apply_cache_headers(response, etag, max_age=86400)
+        apply_cache_headers(response, etag, max_age=0)
     else:
         json_path = get_zone_json_path(project_layout_dir)
         zone_bounds = get_sonrisa_zone_bounds(json_path)
@@ -2611,7 +2618,7 @@ def get_block_map_bg():
         img.save(buffer, format='PNG')
         buffer.seek(0)
         response = send_file(buffer, mimetype='image/png')
-        response.headers['Cache-Control'] = f'public, max-age={DEFAULT_MAX_AGE}'
+        response.headers['Cache-Control'] = 'no-cache'
     log_timing("get_block_map_bg", request_start, project=project)
     return response
 
