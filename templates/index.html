@@ -56,13 +56,16 @@
             inset: 0;
             display: none;
             z-index: 2;
+            overflow: hidden;
         }
+        #zonePicker.dragging #blockMapCanvas { cursor: grabbing; }
         #blockMapCanvas {
             position: absolute;
-            inset: 0;
-            width: 100%; height: 100%;
-            object-fit: contain;
-            cursor: pointer;
+            left: 0;
+            top: 0;
+            width: 0;
+            height: 0;
+            cursor: grab;
             transform-origin: 0 0;
             will-change: transform;
         }
@@ -104,7 +107,7 @@
            ALL CHROME FLOATS ON TOP OF MAP
         ════════════════════════════════════════ */
 
-        /* ── TOP BAR ── */
+        /* ── TOP BAR + SUB BAR ── */
         #topbar {
             position: absolute;
             top: 0; left: 0; right: 0;
@@ -112,7 +115,7 @@
             background: var(--hdr);
             display: flex;
             align-items: center;
-            z-index: 40;
+            z-index: 41;
             box-shadow: 0 2px 8px rgba(0,0,0,0.28);
         }
         #topbar .app-title {
@@ -122,29 +125,70 @@
             flex-shrink: 0;
             letter-spacing: -0.01em;
         }
-        .top-tabs {
+        #subbar {
+            position: absolute;
+            top: 46px; left: 0; right: 0;
+            height: 34px;
+            background: #f4f6f8;
+            border-bottom: 1px solid #d7dde3;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px 0 4px;
+            z-index: 40;
+        }
+        .subbar-left {
             display: flex;
             align-items: center;
             gap: 12px;
-            padding: 0 8px;
-            border-left: 1px solid rgba(255,255,255,0.18);
-            margin-left: 4px;
+            min-width: 0;
+        }
+        #cur-date-pill {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #425261;
+            font-size: 12px;
+            font-weight: 500;
+            min-width: 112px;
+            text-align: center;
+        }
+        .subbar-divider {
+            color: #9aa8b5;
+            font-size: 14px;
+            line-height: 1;
+            user-select: none;
+        }
+        .top-tabs {
+            display: flex;
+            align-items: center;
+            gap: 30px;
+            padding: 0;
+            margin: 0;
         }
         .view-tab {
-            width: 38px; height: 38px;
-            border-radius: 9px;
+            width: 26px; height: 24px;
+            border-radius: 4px;
             cursor: pointer;
-            border: none;
+            border: 1px solid transparent;
             background: transparent;
-            color: rgba(255,255,255,0.65);
-            transition: background 0.15s, color 0.15s;
+            color: #667686;
+            transition: background 0.15s, color 0.15s, border-color 0.15s;
             font-family: inherit;
             display: flex; align-items: center; justify-content: center;
             position: relative;
         }
-        .view-tab svg { width: 19px; height: 19px; }
-        .view-tab.active { background: rgba(255,255,255,0.2); color: #fff; }
-        .view-tab:hover:not(.active) { background: rgba(255,255,255,0.1); color: #fff; }
+        .view-tab svg { width: 14px; height: 14px; }
+        .view-tab.active {
+            background: #e7eef4;
+            border-color: #cfdbe6;
+            color: var(--hdr);
+        }
+        .view-tab:hover:not(.active) {
+            background: #eef2f6;
+            color: #344757;
+            border-color: #d7dee6;
+        }
         /* tooltip on hover */
         .view-tab::after {
             content: attr(data-label);
@@ -165,11 +209,11 @@
         .view-tab:hover::after { opacity: 1; }
 
         #topbar-right {
-            margin-left: auto;
+            margin-left: 0;
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 0 14px;
+            gap: 8px;
+            padding: 0;
         }
         /* overlay toggle */
         .tog-wrap {
@@ -194,15 +238,38 @@
         }
         .tog-track.on .tog-thumb { left: 17px; }
         .back-btn {
-            padding: 4px 10px; border-radius: 5px;
+            padding: 4px 10px; border-radius: 4px;
             font-size: 11px; cursor: pointer;
-            border: 1px solid rgba(255,255,255,0.3);
-            background: rgba(255,255,255,0.1);
-            color: #fff;
+            border: 1px solid #d2dae2;
+            background: #fff;
+            color: #4a5a69;
             display: none;
         }
-        .back-btn:hover { background: rgba(255,255,255,0.2); }
-        #cur-date { font-size: 12px; color: rgba(255,255,255,0.75); }
+        .back-btn:hover { background: #f7f9fb; border-color: #bec8d2; }
+        #cur-date { font-size: 11px; color: #4c5d6d; }
+        #overlay-toggle-wrap { display: none; }
+        #backToZonesBtn {
+            position: static;
+            width: 24px;
+            height: 24px;
+            padding: 0;
+            border-radius: 999px;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(1,64,89,0.18);
+            background: #ffffff;
+            color: #1f4a61;
+            font-size: 15px;
+            line-height: 1;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+        }
+        #backToZonesBtn:hover {
+            background: #f8fbfd;
+            border-color: rgba(1,64,89,0.34);
+            transform: translateY(-0.5px);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.14);
+        }
 
         /* ── SITE LABEL (centered above timeline in site view) ── */
         #site-label {
@@ -231,7 +298,7 @@
         /* ── SELECTION BANNER (zone + date info) ── */
         #selectedZoneBanner {
             position: absolute;
-            top: 54px; left: 12px;
+            top: 86px; left: 12px;
             z-index: 20;
             display: none;
             pointer-events: none;
@@ -294,7 +361,7 @@
         ════════════════════════════════════════ */
         #detail-panel {
             position: absolute;
-            top: 46px; right: 0; bottom: 64px;
+            top: 80px; right: 0; bottom: 64px;
             width: 300px;
             background: #fff;
             border-left: 1px solid var(--bdr);
@@ -506,7 +573,7 @@
         /* ── OVERVIEW FLOATING CARD ── */
         #overview-card {
             position: absolute;
-            top: 54px; right: 12px;
+            top: 86px; right: 12px;
             width: 332px;
             background: #fff; border: 1px solid var(--bdr);
             border-radius: 8px;
@@ -544,74 +611,214 @@
         .site-overview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .site-overview-table th, .site-overview-table td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: right; }
         .site-overview-table th:first-child, .site-overview-table td:first-child { text-align: left; }
-        /* ── SITE KPI STRIP — slim row between topbar and map ── */
+        /* ── SITE KPI STRIP — matches reference design ── */
         #site-stage-kpi-strip {
             position: absolute;
-            top: 58px;          /* gap below 46px topbar */
-            left: 10px;
-            right: 10px;
+            top: 88px;
+            left: 0;
+            right: 0;
             z-index: 31;
-            display: block;     /* JS sets display:none to hide */
+            display: block;
             pointer-events: none;
+            padding: 0 10px;
         }
+        .site-stage-kpi-shell {
+            background: rgba(255,255,255,0.97);
+            border: 1px solid rgba(0,0,0,0.11);
+            border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.13);
+            padding: 6px 10px 7px;
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            pointer-events: auto;
+        }
+        .site-stage-kpi-shell.collapsed {
+            padding-bottom: 6px;
+        }
+        .site-stage-kpi-shell.collapsed .site-stage-kpi-grid {
+            display: none;
+        }
+        /* ── Summary row ── */
+        .site-stage-kpi-summary {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid rgba(0,0,0,0.07);
+        }
+        /* Overall summary bar is taller than stage bars */
+        .site-stage-kpi-summary .site-stage-kpi-progress-track {
+            height: 22px;
+        }
+        .site-stage-kpi-summary-top {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            cursor: grab;
+            user-select: none;
+        }
+        .site-stage-kpi-shell.dragging .site-stage-kpi-summary-top {
+            cursor: grabbing;
+        }
+        .site-stage-kpi-summary-left {
+            display: flex;
+            align-items: baseline;
+            gap: 7px;
+            min-width: 0;
+        }
+        .site-stage-kpi-summary-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--txt);
+        }
+        .site-stage-kpi-summary-total {
+            font-size: 11px;
+            color: var(--txtm);
+            white-space: nowrap;
+        }
+        .site-stage-kpi-collapse-btn {
+            border: 1px solid rgba(0,0,0,0.08);
+            background: #fff;
+            color: #5e6b78;
+            border-radius: 999px;
+            font-family: inherit;
+            cursor: pointer;
+            pointer-events: auto;
+            padding: 0;
+            width: 22px;
+            height: 22px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            line-height: 1;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            transition: all 0.16s ease;
+        }
+        .site-stage-kpi-collapse-btn svg {
+            width: 12px;
+            height: 12px;
+            display: block;
+        }
+        .site-stage-kpi-collapse-btn:hover {
+            color: var(--hdr);
+            border-color: rgba(1,64,89,0.24);
+            box-shadow: 0 2px 7px rgba(0,0,0,0.10);
+            transform: translateY(-1px);
+        }
+        /* ── Stage cards grid ── */
         .site-stage-kpi-grid {
             display: grid;
             grid-template-columns: repeat(4, minmax(0, 1fr));
             gap: 6px;
         }
         .site-stage-kpi-card {
-            display: flex;
-            flex-direction: row;
-            align-items: stretch;
-            border-radius: 6px;
+            border-radius: 5px;
             overflow: hidden;
             background: #fff;
-            border: 1px solid rgba(0,0,0,0.10);
-            box-shadow: 0 1px 6px rgba(0,0,0,0.12);
-            height: 48px;
-        }
-        .site-stage-kpi-head {
-            flex-shrink: 0;
-            width: 68px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            font-weight: 700;
-            color: #fff;
-            text-align: center;
-            padding: 0 4px;
-            line-height: 1.2;
-        }
-        .site-stage-kpi-body {
-            flex: 1;
-            display: flex;
-            flex-direction: row;
-            align-items: center;
-            padding: 0 6px;
-            gap: 0;
-        }
-        .site-stage-kpi-metric {
-            flex: 1;
+            border: 1px solid rgba(0,0,0,0.09);
+            border-left: 3px solid var(--stage-color, rgba(0,0,0,0.15));
+            box-shadow: none;
             display: flex;
             flex-direction: column;
+            cursor: pointer;
+            transition: box-shadow 0.12s ease;
+            padding: 4px 7px 5px;
+        }
+        .site-stage-kpi-card:hover {
+            box-shadow: 0 1px 6px rgba(0,0,0,0.12);
+        }
+        .site-stage-kpi-card.active {
+            box-shadow: 0 0 0 1.5px var(--stage-color, var(--hdr));
+        }
+        /* head row: stage name left, rate right */
+        .site-stage-kpi-head {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 6px;
+            margin-bottom: 3px;
+        }
+        .site-stage-kpi-stage {
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1.2;
+            color: var(--stage-color, var(--txt));
+        }
+        .site-stage-kpi-stage-count {
+            font-size: 10px;
+            font-weight: 500;
+            line-height: 1;
+            white-space: nowrap;
+            color: var(--txtm);
+        }
+        .site-stage-kpi-body {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            min-width: 0;
+        }
+        /* progress track — rounded pill, numbers inside */
+        .site-stage-kpi-progress-track {
+            width: 100%;
+            height: 18px;
+            border-radius: 999px;
+            overflow: hidden;
+            background: #e8edf2;
+            display: flex;
+            border: 1px solid rgba(0,0,0,0.07);
+        }
+        .site-stage-kpi-progress-segment {
+            height: 100%;
+            min-width: 0;
+            transition: width 0.25s ease;
+            display: flex;
             align-items: center;
             justify-content: center;
-            padding: 0 4px;
-            border-left: 1px solid var(--bdr);
+            font-size: 11px;
+            font-weight: 700;
+            line-height: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            color: #fff;
         }
-        .site-stage-kpi-label {
-            font-size: 8px;
-            color: var(--txtm);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
+        .site-stage-kpi-progress-segment.has-value { min-width: 24px; }
+        /* green = completed, orange = in_progress, light gray = not_started */
+        .site-stage-kpi-progress-segment.completed   { background: #43a047; }
+        .site-stage-kpi-progress-segment.in_progress { background: #fb8c00; }
+        .site-stage-kpi-progress-segment.not_started { background: #b0bec5; color: #37474f; }
+        /* footer: tracker count left, % complete right */
+        .site-stage-kpi-foot {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 4px;
+        }
+        .site-stage-kpi-foot-item {
+            font-size: 10px;
+            color: var(--txts);
             white-space: nowrap;
         }
-        .site-stage-kpi-value {
-            font-size: 12px;
-            font-weight: 700;
+        .site-stage-kpi-foot-item strong {
             color: var(--txt);
-            line-height: 1.3;
+            font-weight: 700;
+        }
+        #kpi-progress-tooltip {
+            position: fixed;
+            z-index: 9999;
+            pointer-events: none;
+            display: none;
+            padding: 6px 10px;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.18);
+            background: rgba(18, 26, 38, 0.94);
+            color: #eef2f7;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.25);
+            backdrop-filter: blur(6px);
             white-space: nowrap;
         }
         /* ── ZONE HOVER TOOLTIP ── */
@@ -665,12 +872,17 @@
                 gap: 5px;
             }
         }
+        @media (max-width: 620px) {
+            .site-stage-kpi-grid {
+                grid-template-columns: 1fr;
+            }
+        }
 
         /* ── NON-MAP VIEWS (Table, Charts, Settings) ── */
         /* These slide in as floating full-screen overlays above the map */
         .full-view-overlay {
             position: absolute;
-            top: 46px; left: 0; right: 0; bottom: 0;
+            top: 80px; left: 0; right: 0; bottom: 0;
             background: #fff;
             z-index: 35;
             display: none;
@@ -821,45 +1033,51 @@
     <!-- TOP BAR -->
     <div id="topbar">
         <span class="app-title">Construction Progress Viewer</span>
-        <div class="top-tabs">
-            <!-- Map -->
-            <button class="view-tab active" data-view="map" data-label="Map" title="Map">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
-                    <line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/>
-                </svg>
-            </button>
-            <!-- Table -->
-            <button class="view-tab" data-view="table" data-label="Tables" title="Tables">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/>
-                    <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
-                    <line x1="9" y1="9" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="21"/>
-                </svg>
-            </button>
-            <!-- Charts -->
-            <button class="view-tab" data-view="charts" data-label="Charts" title="Charts">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
-                    <line x1="6"  y1="20" x2="6"  y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>
-                </svg>
-            </button>
-            <!-- Settings -->
-            <button class="view-tab" data-view="settings" data-label="Settings" title="Settings">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                </svg>
-            </button>
+    </div>
+    <div id="subbar">
+        <div class="subbar-left">
+            <button class="back-btn" id="backToZonesBtn" title="Back to map" aria-label="Back to map">←</button>
+            <div id="cur-date-pill"><span id="cur-date"></span></div>
+            <span class="subbar-divider" aria-hidden="true">|</span>
+            <div class="top-tabs">
+                <!-- Map -->
+                <button class="view-tab active" data-view="map" data-label="Map" title="Map">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="3 6 9 3 15 6 21 3 21 18 15 21 9 18 3 21"/>
+                        <line x1="9" y1="3" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="21"/>
+                    </svg>
+                </button>
+                <!-- Table -->
+                <button class="view-tab" data-view="table" data-label="Tables" title="Tables">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/>
+                        <line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/>
+                        <line x1="9" y1="9" x2="9" y2="21"/><line x1="15" y1="9" x2="15" y2="21"/>
+                    </svg>
+                </button>
+                <!-- Charts -->
+                <button class="view-tab" data-view="charts" data-label="Charts" title="Charts">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/>
+                        <line x1="6"  y1="20" x2="6"  y2="14"/><line x1="2" y1="20" x2="22" y2="20"/>
+                    </svg>
+                </button>
+                <!-- Settings -->
+                <button class="view-tab" data-view="settings" data-label="Settings" title="Settings">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>
+            </div>
         </div>
         <div id="topbar-right">
             <div class="tog-wrap" id="overlay-toggle-wrap">
                 <div class="tog-track on" id="overlay-tog-track"><div class="tog-thumb"></div></div>
                 <span>Overlays</span>
             </div>
-            <button class="back-btn" id="backToZonesBtn">← Zones</button>
-            <button class="back-btn" id="backToProjectsBtn">← Projects</button>
-            <span id="cur-date"></span>
+            <button class="back-btn" id="overview-toggle-btn" style="display:inline-flex">Overview</button>
+            <button class="back-btn" id="backToProjectsBtn">Projects</button>
         </div>
     </div>
 
@@ -878,6 +1096,7 @@
 
     <!-- SITE STAGE KPI STRIP -->
     <div id="site-stage-kpi-strip" style="display:none"></div>
+    <div id="kpi-progress-tooltip"></div>
 
 
 
@@ -1099,7 +1318,6 @@
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 
 <script>
-    
     // ══════════════════════════════════════════════════════════════════
     //  BRIDGE: wire new UI elements to the original codebase
     //  All original logic is preserved below unchanged.
@@ -1171,17 +1389,16 @@
 
     function syncTimelineUI(index, dates) {
         if (!dates || !dates.length) return;
-        const safeIndex = Math.min(Math.max(index || 0, 0), dates.length - 1);
-        const pct = safeIndex / Math.max(dates.length - 1, 1) * 100;
+        const pct = index / Math.max(dates.length - 1, 1) * 100;
         document.getElementById('tl-fill').style.width = pct + '%';
-        document.getElementById('cur-date').textContent    = dates[safeIndex].display || '';
+        document.getElementById('cur-date').textContent    = dates[index].display || '';
 
         // labels
         const lblEl = document.getElementById('tl-labels');
         lblEl.innerHTML = '';
         dates.forEach((d, i) => {
             const s = document.createElement('span');
-            s.className = 'tl-label' + (i === safeIndex ? ' active' : '');
+            s.className = 'tl-label' + (i === index ? ' active' : '');
             s.textContent = d.label || d.display || '';
             s.addEventListener('click', () => {
                 const slider = document.getElementById('timelineSlider');
@@ -1197,9 +1414,9 @@
         dates.forEach((d, i) => {
             const dot = document.createElement('div');
             dot.style.left = `${i / Math.max(dates.length - 1, 1) * 100}%`;
-            if (i === safeIndex) {
+            if (i === index) {
                 dot.className = 'tl-dot active';
-            } else if (i < safeIndex) {
+            } else if (i < index) {
                 dot.className = 'tl-dot past';
             } else {
                 dot.className = 'tl-dot future';
@@ -1246,6 +1463,16 @@
     _shimSidebar.id = 'rightSidebar'; _shimSidebar.style.display = 'none';
     document.getElementById('app').appendChild(_shimSidebar);
 
+    // Single Overview toggle control
+    const _overviewToggleBtn = document.getElementById('overview-toggle-btn');
+    if (_overviewToggleBtn) {
+        _overviewToggleBtn.addEventListener('click', () => {
+            if (typeof _closePanel === 'function') _closePanel();
+            const card = document.getElementById('overview-card');
+            if (card) card.classList.toggle('open');
+        });
+    }
+
     // ── OVERVIEW CARD TOGGLE ───────────────────────────────────────────
     function _showOverviewCard() {
         document.getElementById('overview-card').classList.add('open');
@@ -1254,21 +1481,6 @@
         document.getElementById('overview-card').classList.remove('open');
     }
     document.getElementById('overview-close-btn').addEventListener('click', _hideOverviewCard);
-
-    // Add Overview button to topbar-right
-    const _ovBtn = document.createElement('button');
-    _ovBtn.className = 'back-btn';
-    _ovBtn.id = 'overview-toggle-btn';
-    _ovBtn.textContent = 'Overview';
-    _ovBtn.style.display = 'inline-block';
-    _ovBtn.style.background = 'rgba(255,255,255,0.12)';
-    document.getElementById('topbar-right').insertBefore(
-        _ovBtn, document.getElementById('cur-date')
-    );
-    _ovBtn.addEventListener('click', () => {
-        const card = document.getElementById('overview-card');
-        card.classList.toggle('open');
-    });
 
     // ── TRACKER PREVIEW PANEL WIRING ──────────────────────────────────
     // The original code populates #trackerPreview. We mirror it into our panel.
@@ -1288,6 +1500,8 @@
 
     function _openPanel() {
         const panel = document.getElementById('detail-panel');
+        const overviewCard = document.getElementById('overview-card');
+        if (overviewCard) overviewCard.classList.remove('open');
         panel.classList.add('open');
         document.getElementById('panel-handle').textContent = '›';
         document.getElementById('panel-header').style.display = '';
@@ -1296,7 +1510,9 @@
         document.getElementById('site-label').style.display   = 'none';
             const kpiStrip = document.getElementById('site-stage-kpi-strip');
             if (kpiStrip) kpiStrip.style.display = 'none';
-        document.getElementById('selectedZoneBanner').style.display = 'none';
+        /* Keep zone/date banner visible in zone-tracker view. */
+        if (typeof selectedZone !== 'undefined' && selectedZone) updateSelectedZoneBanner();
+        else document.getElementById('selectedZoneBanner').style.display = 'none';
     }
     function _closePanel() {
         const panel = document.getElementById('detail-panel');
@@ -1552,6 +1768,7 @@
 
     // ── open zone preview in the detail panel ─────────────────────────────
     function showZonePreview(zone) {
+        if (typeof _hideOverviewCard === 'function') _hideOverviewCard();
         _previewZone = zone;
         _revokeZonePreviewUrl();
 
@@ -1668,12 +1885,113 @@
 
         /* ── zone map pan / zoom state ── */
         let _zmZoom = 1, _zmPanX = 0, _zmPanY = 0;
+        let _zmBaseScale = 1, _zmBaseOffsetX = 0, _zmBaseOffsetY = 0;
+        let _zmDragActive = false, _zmDragMoved = false, _zmSuppressClick = false;
+        let _zmLastDragX = 0, _zmLastDragY = 0, _zmInteractionsBound = false;
         function _applyZMTransform() {
             const c = document.getElementById('blockMapCanvas');
             if (c) c.style.transform = `translate(${_zmPanX}px,${_zmPanY}px) scale(${_zmZoom})`;
         }
+        function _updateZoneCanvasViewportFit() {
+            const canvas = document.getElementById('blockMapCanvas');
+            const picker = document.getElementById('zonePicker');
+            if (!canvas || !picker || !canvas.width || !canvas.height) return;
+            const pw = picker.clientWidth;
+            const ph = picker.clientHeight;
+            if (!pw || !ph) return;
+            _zmBaseScale = Math.max(pw / canvas.width, ph / canvas.height);
+            const drawW = canvas.width * _zmBaseScale;
+            const drawH = canvas.height * _zmBaseScale;
+            _zmBaseOffsetX = (pw - drawW) / 2;
+            _zmBaseOffsetY = (ph - drawH) / 2;
+            canvas.style.width = `${drawW}px`;
+            canvas.style.height = `${drawH}px`;
+            canvas.style.left = `${_zmBaseOffsetX}px`;
+            canvas.style.top = `${_zmBaseOffsetY}px`;
+            _applyZMTransform();
+        }
         function _resetZMTransform() {
             _zmZoom = 1; _zmPanX = 0; _zmPanY = 0; _applyZMTransform();
+        }
+        function _zoomZoneMap(factor = 1) {
+            const picker = document.getElementById('zonePicker');
+            if (!picker) return;
+            const oldZoom = _zmZoom || 1;
+            const nextZoom = Math.max(0.6, Math.min(oldZoom * factor, 5.0));
+            if (Math.abs(nextZoom - oldZoom) < 1e-6) return;
+            const ratio = nextZoom / oldZoom;
+            const centerX = (picker.clientWidth / 2) - _zmBaseOffsetX;
+            const centerY = (picker.clientHeight / 2) - _zmBaseOffsetY;
+            _zmPanX = centerX - ((centerX - _zmPanX) * ratio);
+            _zmPanY = centerY - ((centerY - _zmPanY) * ratio);
+            _zmZoom = nextZoom;
+            _applyZMTransform();
+        }
+        function _resetZoneMapViewport() {
+            _updateZoneCanvasViewportFit();
+            _resetZMTransform();
+        }
+        function _bindZonePickerInteractions() {
+            if (_zmInteractionsBound) return;
+            const picker = document.getElementById('zonePicker');
+            const mapCanvas = document.getElementById('blockMapCanvas');
+            if (!picker || !mapCanvas) return;
+            const beginDrag = (clientX, clientY) => {
+                _zmDragActive = true;
+                _zmDragMoved = false;
+                _zmSuppressClick = false;
+                _zmLastDragX = clientX;
+                _zmLastDragY = clientY;
+                picker.classList.add('dragging');
+            };
+            const moveDrag = (clientX, clientY) => {
+                if (!_zmDragActive) return;
+                const dx = clientX - _zmLastDragX;
+                const dy = clientY - _zmLastDragY;
+                if (Math.abs(dx) + Math.abs(dy) > 1) {
+                    _zmDragMoved = true;
+                    _zmSuppressClick = true;
+                }
+                _zmPanX += dx;
+                _zmPanY += dy;
+                _zmLastDragX = clientX;
+                _zmLastDragY = clientY;
+                _applyZMTransform();
+            };
+            const endDrag = () => {
+                if (!_zmDragActive) return;
+                _zmDragActive = false;
+                picker.classList.remove('dragging');
+            };
+            mapCanvas.style.touchAction = 'none';
+            mapCanvas.addEventListener('pointerdown', (event) => {
+                if (event.pointerType === 'mouse' && event.button !== 0) return;
+                beginDrag(event.clientX, event.clientY);
+                if (mapCanvas.setPointerCapture) mapCanvas.setPointerCapture(event.pointerId);
+                event.preventDefault();
+            });
+            mapCanvas.addEventListener('pointermove', (event) => {
+                moveDrag(event.clientX, event.clientY);
+            });
+            mapCanvas.addEventListener('pointerup', (event) => {
+                endDrag();
+                if (mapCanvas.releasePointerCapture && mapCanvas.hasPointerCapture?.(event.pointerId)) {
+                    mapCanvas.releasePointerCapture(event.pointerId);
+                }
+            });
+            mapCanvas.addEventListener('pointercancel', (event) => {
+                endDrag();
+                if (mapCanvas.releasePointerCapture && mapCanvas.hasPointerCapture?.(event.pointerId)) {
+                    mapCanvas.releasePointerCapture(event.pointerId);
+                }
+            });
+            picker.addEventListener('wheel', (event) => {
+                if (!isZonePickerActive || selectedZone) return;
+                event.preventDefault();
+                const factor = event.deltaY < 0 ? 1.12 : (1 / 1.12);
+                _zoomZoneMap(factor);
+            }, { passive: false });
+            _zmInteractionsBound = true;
         }
         let layoutData = null;
         let canvas = null;
@@ -1711,6 +2029,7 @@
 
         let siteStageCounts = {};
         let siteStageStatusCounts = {};
+        let siteStageProgressStatusCounts = {};
         let siteTotalTrackers = 0;
 
         let selectedZone = null;
@@ -1813,6 +2132,7 @@
                 ctx.restore();
 
             }
+            _updateZoneCanvasViewportFit();
         }
 
         function loadBlockMapBackground() {
@@ -1931,6 +2251,117 @@
         }
         let siteKpiLoaded = false;
         let siteKpiStageCounts = {};
+        let siteKpiCollapsed = false;
+        let siteKpiDragOffsetX = 0;
+        let siteKpiDragOffsetY = 0;
+        let siteKpiDragWired = false;
+
+        function applySiteKpiCollapsedState() {
+            const shell = document.querySelector('#site-stage-kpi-strip .site-stage-kpi-shell');
+            if (!shell) return;
+            shell.classList.toggle('collapsed', siteKpiCollapsed);
+            const toggleBtn = shell.querySelector('.site-stage-kpi-collapse-btn');
+            if (toggleBtn) {
+                toggleBtn.innerHTML = siteKpiCollapsed
+                    ? '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                    : '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 10l4.5-4.5L12.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+                toggleBtn.title = siteKpiCollapsed ? 'Show progress' : 'Hide progress';
+                toggleBtn.setAttribute('aria-label', siteKpiCollapsed ? 'Show progress' : 'Hide progress');
+            }
+        }
+        function applySiteKpiStripPosition() {
+            const strip = document.getElementById('site-stage-kpi-strip');
+            if (!strip) return;
+            strip.style.transform = `translate(${siteKpiDragOffsetX}px, ${siteKpiDragOffsetY}px)`;
+        }
+        function bindKpiSegmentTooltips(container) {
+            if (!container) return;
+            const tooltip = document.getElementById('kpi-progress-tooltip');
+            if (!tooltip) return;
+            const placeTooltip = (event) => {
+                const pad = 12;
+                const edgePad = 8;
+                const tw = tooltip.offsetWidth || 0;
+                const th = tooltip.offsetHeight || 0;
+                let x = event.clientX + pad;
+                let y = event.clientY + pad;
+                if (x + tw > window.innerWidth - edgePad) x = event.clientX - tw - pad;
+                if (y + th > window.innerHeight - edgePad) y = event.clientY - th - pad;
+                /* Final hard clamp to keep tooltip fully within viewport corners */
+                x = Math.max(edgePad, Math.min(x, window.innerWidth - tw - edgePad));
+                y = Math.max(edgePad, Math.min(y, window.innerHeight - th - edgePad));
+                tooltip.style.left = `${x}px`;
+                tooltip.style.top = `${y}px`;
+            };
+            const segments = container.querySelectorAll('.site-stage-kpi-progress-segment[data-tooltip]');
+            segments.forEach(segment => {
+                segment.addEventListener('mouseenter', (event) => {
+                    const text = segment.getAttribute('data-tooltip');
+                    if (!text) return;
+                    tooltip.textContent = text;
+                    tooltip.style.display = 'block';
+                    placeTooltip(event);
+                });
+                segment.addEventListener('mousemove', (event) => {
+                    if (tooltip.style.display !== 'block') return;
+                    placeTooltip(event);
+                });
+                segment.addEventListener('mouseleave', () => {
+                    tooltip.style.display = 'none';
+                });
+            });
+        }
+        function enableSiteKpiDragging() {
+            if (siteKpiDragWired) return;
+            const strip = document.getElementById('site-stage-kpi-strip');
+            if (!strip) return;
+            let dragging = false;
+            let startX = 0;
+            let startY = 0;
+            let originX = siteKpiDragOffsetX;
+            let originY = siteKpiDragOffsetY;
+            const beginDrag = (clientX, clientY) => {
+                dragging = true;
+                startX = clientX;
+                startY = clientY;
+                originX = siteKpiDragOffsetX;
+                originY = siteKpiDragOffsetY;
+                strip.querySelector('.site-stage-kpi-shell')?.classList.add('dragging');
+            };
+            const moveDrag = (clientX, clientY) => {
+                if (!dragging) return;
+                siteKpiDragOffsetX = originX + (clientX - startX);
+                siteKpiDragOffsetY = originY + (clientY - startY);
+                applySiteKpiStripPosition();
+            };
+            const stopDrag = () => {
+                if (!dragging) return;
+                dragging = false;
+                strip.querySelector('.site-stage-kpi-shell')?.classList.remove('dragging');
+            };
+            strip.addEventListener('mousedown', (event) => {
+                if (!event.target.closest('.site-stage-kpi-summary-top')) return;
+                if (event.target.closest('.site-stage-kpi-collapse-btn')) return;
+                event.preventDefault();
+                beginDrag(event.clientX, event.clientY);
+            });
+            document.addEventListener('mousemove', (event) => moveDrag(event.clientX, event.clientY));
+            document.addEventListener('mouseup', stopDrag);
+            strip.addEventListener('touchstart', (event) => {
+                if (!event.target.closest('.site-stage-kpi-summary-top')) return;
+                if (event.target.closest('.site-stage-kpi-collapse-btn')) return;
+                const touch = event.touches?.[0];
+                if (!touch) return;
+                beginDrag(touch.clientX, touch.clientY);
+            }, { passive: true });
+            document.addEventListener('touchmove', (event) => {
+                const touch = event.touches?.[0];
+                if (!touch) return;
+                moveDrag(touch.clientX, touch.clientY);
+            }, { passive: true });
+            document.addEventListener('touchend', stopDrag);
+            siteKpiDragWired = true;
+        }
 
         function renderSiteStageKpiStrip(dateId, stageCountsInput = null) {
             const kpiStrip = document.getElementById('site-stage-kpi-strip');
@@ -1952,37 +2383,125 @@
             }
             /* Denominator: total trackers from info JSON, else fall back to staged total */
             const denominator = PROJECT_TOTAL_TRACKERS > 0 ? PROJECT_TOTAL_TRACKERS : stageTotalTrackers;
-            /* Cumulative stage counts from day-one to latest flight date (from snapshotSeries) */
-            const latestSnapshot = snapshotSeries.length ? snapshotSeries[snapshotSeries.length - 1] : null;
             /* Rate comes from the latest working-day data point regardless of slider */
             const latestRateDateId = workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : dateId;
+            const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
+                ? siteStageProgressStatusCounts
+                : (siteStageStatusCounts || {});
+            const statusTotals = statusDefinitions.reduce((acc, status) => {
+                acc[status.key] = stageDefinitions.reduce((sum, stage) => sum + (stageStatusSource[stage.key]?.[status.key] || 0), 0);
+                return acc;
+            }, {});
+            const aggregatedStatusTotal = statusDefinitions.reduce((sum, status) => sum + (statusTotals[status.key] || 0), 0);
+            /* Prefer project JSON total trackers for top-level KPI denominator */
+            const overallTotal = (PROJECT_TOTAL_TRACKERS > 0)
+                ? PROJECT_TOTAL_TRACKERS
+                : (aggregatedStatusTotal || stageTotalTrackers || denominator || 0);
+            /* Business rule for OVERALL progress:
+               - Completed: solar_panel completed
+               - In progress: observed trackers that have started but are not completed
+               - Not started: everything else out of project total */
+            const observedTotal = stageTotalTrackers;
+            const overallCompleted = stageStatusSource?.solar_panel?.completed || 0;
+            const observedNotStarted = stageStatusSource?.pile?.not_started || 0;
+            const overallInProgress = Math.max(0, observedTotal - overallCompleted - observedNotStarted);
+            const overallNotStarted = Math.max(0, overallTotal - overallCompleted - overallInProgress);
+            const overallStatusTotals = {
+                completed: overallCompleted,
+                in_progress: overallInProgress,
+                not_started: overallNotStarted
+            };
+            /* Overall summary bar: include not_started as requested. */
+            const summarySegments = statusDefinitions.map(status => {
+                const statusCount = overallStatusTotals[status.key] || 0;
+                const pct = overallTotal > 0 ? ((statusCount / overallTotal) * 100) : 0;
+                const text = statusCount > 0 ? statusCount : '';
+                const valueClass = statusCount > 0 ? 'has-value' : '';
+                const tooltip = `${status.label}: ${pct.toFixed(1)}%`;
+                return `<span class="site-stage-kpi-progress-segment ${status.key} ${valueClass}" style="width:${pct.toFixed(2)}%" data-tooltip="${tooltip}">${text}</span>`;
+            }).join('');
             const kpiCardsHtml = stageDefinitions.map(stage => {
                 const stageCount = stageCounts[stage.key] || 0;
-                /* Cumulative trackers that have reached or passed this stage since day one */
-                const cumulativeCount = latestSnapshot ? (latestSnapshot.perStage?.[stage.key] || 0) : stageCount;
-                const pctComplete = denominator > 0 ? ((cumulativeCount / denominator) * 100) : 0;
+                const stageStatusCounts = stageStatusSource[stage.key] || {};
+                const stageCompleted = stageStatusCounts.completed || 0;
+                const stageInProgress = stageStatusCounts.in_progress || 0;
+                const stageNotStarted = Math.max(0, overallTotal - stageCompleted - stageInProgress);
+                const stageStatusTotals = {
+                    completed: stageCompleted,
+                    in_progress: stageInProgress,
+                    not_started: stageNotStarted
+                };
+                const stagePercentDenominator = overallTotal > 0 ? overallTotal : 1;
+                const pctComplete = stagePercentDenominator > 0 ? ((stageCompleted / stagePercentDenominator) * 100) : 0;
                 const trackerRatePerDay = getCurrentWorkingDayStageRate(stage.key, latestRateDateId);
-                const componentRate = trackerRatePerDay == null ? null : trackerRatePerDay * getStageComponentsPerTracker(stage.key);
-                const rateText = componentRate == null ? 'N/A' : `${formatNumericValue(componentRate, 1)} ${getStageRateUnit(stage.key)}`;
-                return `<div class="site-stage-kpi-card">
-                    <div class="site-stage-kpi-head" style="background:${getStageColor(stage.key)}">${stage.label}</div>
+                const componentRatePerDay = trackerRatePerDay == null
+                    ? null
+                    : trackerRatePerDay * getStageComponentsPerTracker(stage.key);
+                const rateUnit = getStageRateUnit(stage.key);
+                const rateText = componentRatePerDay == null
+                    ? ''
+                    : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
+                const stageSegments = statusDefinitions.map(status => {
+                    const count = stageStatusTotals[status.key] || 0;
+                    const pct = stagePercentDenominator > 0 ? ((count / stagePercentDenominator) * 100) : 0;
+                    const text = count > 0 ? count : '';
+                    const valueClass = count > 0 ? 'has-value' : '';
+                    const statusLabel = status.label;
+                    const tooltip = `${statusLabel}: ${pct.toFixed(1)}%`;
+                    return `<span class="site-stage-kpi-progress-segment ${status.key} ${valueClass}" style="width:${pct.toFixed(2)}%" data-tooltip="${tooltip}">${text}</span>`;
+                }).join('');
+                const isActiveStage = selectedStage === stage.key;
+                const stageColor = getStageColor(stage.key);
+                return `<div class="site-stage-kpi-card ${isActiveStage ? 'active' : ''}" data-stage="${stage.key}" style="--stage-color:${stageColor}">
+                    <div class="site-stage-kpi-head">
+                        <span class="site-stage-kpi-stage">${stage.label}</span>
+                        ${rateText ? `<span class="site-stage-kpi-stage-count">${rateText}</span>` : ''}
+                    </div>
                     <div class="site-stage-kpi-body">
-                        <div class="site-stage-kpi-metric">
-                            <span class="site-stage-kpi-label">Complete</span>
-                            <span class="site-stage-kpi-value">${formatNumericValue(pctComplete, 1)}%</span>
-                        </div>
-                        <div class="site-stage-kpi-metric">
-                            <span class="site-stage-kpi-label">Active Trackers</span>
-                            <span class="site-stage-kpi-value">${stageCount}</span>
-                        </div>
-                        <div class="site-stage-kpi-metric">
-                            <span class="site-stage-kpi-label">Daily Rate</span>
-                            <span class="site-stage-kpi-value">${rateText}</span>
+                        <div class="site-stage-kpi-progress-track">${stageSegments}</div>
+                        <div class="site-stage-kpi-foot">
+                            <span class="site-stage-kpi-foot-item"><strong>${stageCount}</strong> trackers</span>
+                            <span class="site-stage-kpi-foot-item"><strong>${formatNumericValue(pctComplete, 1)}%</strong> complete</span>
                         </div>
                     </div>
                 </div>`;
             }).join('');
-            kpiStrip.innerHTML = `<div class="site-stage-kpi-grid">${kpiCardsHtml}</div>`;
+            kpiStrip.innerHTML = `<div class="site-stage-kpi-shell">
+                <div class="site-stage-kpi-summary">
+                    <div class="site-stage-kpi-summary-top">
+                        <div class="site-stage-kpi-summary-left">
+                            <span class="site-stage-kpi-summary-title">Overall Progress</span>
+                            <span class="site-stage-kpi-summary-total">${overallTotal} trackers</span>
+                        </div>
+                        <button type="button" class="site-stage-kpi-collapse-btn" title="Hide progress" aria-label="Hide progress">
+                            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                                <path d="M3.5 10l4.5-4.5L12.5 10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="site-stage-kpi-progress-track">${summarySegments}</div>
+                </div>
+                <div class="site-stage-kpi-grid">${kpiCardsHtml}</div>
+            </div>`;
+            const collapseBtn = kpiStrip.querySelector('.site-stage-kpi-collapse-btn');
+            if (collapseBtn) {
+                collapseBtn.addEventListener('click', () => {
+                    siteKpiCollapsed = !siteKpiCollapsed;
+                    applySiteKpiCollapsedState();
+                });
+            }
+            kpiStrip.querySelectorAll('.site-stage-kpi-card[data-stage]').forEach(card => {
+                card.addEventListener('click', () => {
+                    const stageKey = card.dataset.stage;
+                    if (!stageKey) return;
+                    handleStageSelection(stageKey);
+                    renderSiteStageKpiStrip(dateId, stageCounts);
+                });
+            });
+            bindKpiSegmentTooltips(kpiStrip);
+            enableSiteKpiDragging();
+            applySiteKpiStripPosition();
+            applySiteKpiCollapsedState();
             kpiStrip.style.display = (isZonePickerActive && !selectedZone) ? 'block' : 'none';
             siteKpiLoaded = true;
             siteKpiStageCounts = stageCounts;
@@ -2154,6 +2673,7 @@
         async function init() {
             try {
                 setupViewTabs();
+                setupZoomControls();
                 await loadProjectSettings();
                 await loadManpowerData();
                 setupManualDateControls();
@@ -2225,9 +2745,11 @@
                 const timelineContainer = document.getElementById('timelineContainer');
                 const backBtn = document.getElementById('backToZonesBtn');
                 const backProjectsBtn = document.getElementById('backToProjectsBtn');
+                const zoomCtrl = document.getElementById('zoom-ctrl');
                 if (zonePicker) { zonePicker.style.display = 'block'; }
                 if (layoutWrapper) layoutWrapper.style.display = 'none';
                 if (timelineContainer) timelineContainer.style.display = 'none';
+                if (zoomCtrl) zoomCtrl.style.display = 'flex';
                 updateSelectedZoneBanner();
                 isZonePickerActive = true;
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
@@ -2236,7 +2758,13 @@
                 if (filterSection) filterSection.style.display = 'block';
                 renderStageFilters();
                 renderStatusFilters();
-                if (backBtn) { backBtn.style.display = 'inline-flex'; backBtn.addEventListener('click', returnToZonePicker); }
+                if (backBtn) {
+                    backBtn.style.display = 'none';
+                    if (!backBtn.dataset.bound) {
+                        backBtn.addEventListener('click', returnToZonePicker);
+                        backBtn.dataset.bound = 'true';
+                    }
+                }
                 if (backProjectsBtn) { backProjectsBtn.style.display = 'inline-flex'; backProjectsBtn.addEventListener('click', returnToProjectSelection); }
 
                 const resp = await timedFetch('/api/zones', {}, 'zones');
@@ -2247,7 +2775,9 @@
                 if (mapCanvas) {
                     await loadBlockMapBackground();
                     drawBlockMapCanvas(data);
+                    _bindZonePickerInteractions();
                     mapCanvas.addEventListener('click', (event) => {
+                        if (_zmSuppressClick) { _zmSuppressClick = false; return; }
                         const zone = getZoneFromClick(event);
                         if (zone) selectZone(zone);
                     });
@@ -2256,11 +2786,15 @@
                     const tip = document.getElementById('zone-hover-tip');
                     let _lastHoveredZone = null;
                     mapCanvas.addEventListener('mousemove', (event) => {
+                        if (_zmDragActive) {
+                            if (tip) tip.style.display = 'none';
+                            return;
+                        }
                         const zone = getZoneFromClick(event);
                         if (!zone) {
                             if (tip) tip.style.display = 'none';
                             _lastHoveredZone = null;
-                            mapCanvas.style.cursor = 'default';
+                            mapCanvas.style.cursor = 'grab';
                             return;
                         }
                         mapCanvas.style.cursor = 'pointer';
@@ -2301,7 +2835,7 @@
                     mapCanvas.addEventListener('mouseleave', () => {
                         if (tip) tip.style.display = 'none';
                         _lastHoveredZone = null;
-                        mapCanvas.style.cursor = 'default';
+                        mapCanvas.style.cursor = 'grab';
                     });
                 }
 
@@ -2375,23 +2909,15 @@
             const pickerRect = picker.getBoundingClientRect();
             if (!pickerRect.width || !pickerRect.height || !canvas.width || !canvas.height) return null;
 
-            /* Inverse-project through pan/zoom transform to get untransformed canvas-local coords */
-            const localX = (event.clientX - pickerRect.left - _zmPanX) / _zmZoom;
-            const localY = (event.clientY - pickerRect.top  - _zmPanY) / _zmZoom;
+            /* Inverse-project through base-cover scaling + pan/zoom transform */
+            const totalScale = _zmBaseScale * _zmZoom;
+            if (!totalScale) return null;
+            const drawX = (event.clientX - pickerRect.left - _zmBaseOffsetX - _zmPanX) / totalScale;
+            const drawY = (event.clientY - pickerRect.top  - _zmBaseOffsetY - _zmPanY) / totalScale;
+            if (drawX < 0 || drawY < 0 || drawX > canvas.width || drawY > canvas.height) return null;
 
-            /* Letterbox offsets at zoom-1 size */
-            const scale = Math.min(pickerRect.width / canvas.width, pickerRect.height / canvas.height);
-            const drawnW = canvas.width  * scale;
-            const drawnH = canvas.height * scale;
-            const padX = (pickerRect.width  - drawnW) / 2;
-            const padY = (pickerRect.height - drawnH) / 2;
-
-            const drawX = localX - padX;
-            const drawY = localY - padY;
-            if (drawX < 0 || drawY < 0 || drawX > drawnW || drawY > drawnH) return null;
-
-            const relX = drawX / drawnW;
-            const relY = drawY / drawnH;
+            const relX = drawX / canvas.width;
+            const relY = drawY / canvas.height;
             const overall = zoneMeta.overall_bounds;
             const lon = overall.min_lon + relX * (overall.max_lon - overall.min_lon);
             const lat = overall.max_lat - relY * (overall.max_lat - overall.min_lat);
@@ -2405,6 +2931,7 @@
 
         async function selectZone(zone) {
             selectedZone = zone;
+            _hideOverviewCard();
             updateSelectedZoneBanner();
             latestSummaryRequestKey = `${zone}|${Date.now()}`;
             const summaryRequestKey = latestSummaryRequestKey;
@@ -2414,6 +2941,8 @@
             const filterSection = document.getElementById('filterSection');
             if (zonePicker) zonePicker.style.display = 'none';
             if (layoutWrapper) layoutWrapper.style.display = '';
+            const backBtn = document.getElementById('backToZonesBtn');
+            if (backBtn) backBtn.style.display = 'inline-flex';
             if (siteOverviewSection) siteOverviewSection.style.display = 'none';
             if (filterSection) filterSection.style.display = 'block';
             const zoomCtrl = document.getElementById('zoom-ctrl');
@@ -2504,8 +3033,10 @@
             const timelineContainer = document.getElementById('timelineContainer');
             if (zonePicker) zonePicker.style.display = 'block';
             if (layoutWrapper) layoutWrapper.style.display = 'none';
+            const backBtn = document.getElementById('backToZonesBtn');
+            if (backBtn) backBtn.style.display = 'none';
             const zoomCtrlBack = document.getElementById('zoom-ctrl');
-            if (zoomCtrlBack) zoomCtrlBack.style.display = 'none';
+            if (zoomCtrlBack) zoomCtrlBack.style.display = 'flex';
             if (timelineContainer) {
                 timelineContainer.style.display = availableDates.length > 1 ? '' : 'none';
                 if (availableDates.length > 0) {
@@ -2608,6 +3139,9 @@
             const availableCount = data.available_count ?? rows.length;
             const completedZones = data.completed_zones_count ?? rows.filter(r => r.pct === '100.0').length;
             const stageCounts = data.stage_counts || {};
+            if (data.stage_counts) siteStageCounts = data.stage_counts;
+            if (data.stage_status_counts) siteStageStatusCounts = data.stage_status_counts;
+            if (data.stage_progress_status_counts) siteStageProgressStatusCounts = data.stage_progress_status_counts;
             const summaryHtml = `<div class="site-overview-summary"><div>Total Number of Zones: ${totalZones}</div><div>Available zones: ${availableCount}</div><div>Number of Completed Zones: ${completedZones}</div></div>`;
             const header = `<table class="site-overview-table"><thead><tr><th>Zone</th><th>Total</th><th>Completed</th><th>%</th></tr></thead><tbody>`;
             const body = rows.map(r => `<tr><td>${r.zone}</td><td>${r.total}</td><td>${r.completed}</td><td>${r.pct}%</td></tr>`).join('');
@@ -2617,6 +3151,7 @@
             if (data.stage_counts && data.stage_status_counts) {
                 siteStageCounts = data.stage_counts;
                 siteStageStatusCounts = data.stage_status_counts;
+                if (data.stage_progress_status_counts) siteStageProgressStatusCounts = data.stage_progress_status_counts;
                 siteTotalTrackers = Object.values(data.stage_counts).reduce((a, b) => a + b, 0);
                 if (isZonePickerActive) { renderStageFilters(); renderStatusFilters(); updateFilterSummary(); }
             }
@@ -3157,10 +3692,33 @@
             const zoomInBtn   = document.getElementById('zoomInBtn');
             const zoomOutBtn  = document.getElementById('zoomOutBtn');
             const zoomResetBtn = document.getElementById('zoomResetBtn');
-            if (zoomInBtn)    zoomInBtn.onclick    = () => { zoomLevel = Math.min(zoomLevel * 1.2, 5.0); updateCanvasTransform(); };
-            if (zoomOutBtn)   zoomOutBtn.onclick   = () => { zoomLevel = Math.max(zoomLevel / 1.2, 0.5); updateCanvasTransform(); };
-            if (zoomResetBtn) zoomResetBtn.onclick = () => { zoomLevel = 1.0; panX = 0; panY = 0; updateCanvasTransform(); };
+            const inZonePicker = () => HAS_ZONES && isZonePickerActive && !selectedZone;
+            if (zoomInBtn) {
+                zoomInBtn.onclick = () => {
+                    if (inZonePicker()) { _zoomZoneMap(1.2); return; }
+                    zoomLevel = Math.min(zoomLevel * 1.2, 5.0);
+                    updateCanvasTransform();
+                };
+            }
+            if (zoomOutBtn) {
+                zoomOutBtn.onclick = () => {
+                    if (inZonePicker()) { _zoomZoneMap(1 / 1.2); return; }
+                    zoomLevel = Math.max(zoomLevel / 1.2, 0.5);
+                    updateCanvasTransform();
+                };
+            }
+            if (zoomResetBtn) {
+                zoomResetBtn.onclick = () => {
+                    if (inZonePicker()) { _resetZoneMapViewport(); return; }
+                    zoomLevel = 1.0;
+                    panX = 0;
+                    panY = 0;
+                    updateCanvasTransform();
+                };
+            }
             const container = document.getElementById('layoutContainer');
+            if (!container || container.dataset.zoomBound === 'true') return;
+            container.dataset.zoomBound = 'true';
             container.addEventListener('wheel', (e) => {
                 e.preventDefault();
                 const factor = e.deltaY < 0 ? 1.15 : 0.87;
@@ -3487,6 +4045,7 @@
             } else {
                 updateTimelinePosition();
             }
+            if (HAS_ZONES && isZonePickerActive) _updateZoneCanvasViewportFit();
         });
 </script>
 
