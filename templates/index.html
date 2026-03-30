@@ -1825,7 +1825,7 @@
         const ph        = document.getElementById('zp-dprev-ph');
         if (!container) return;
 
-        fetch(`/api/zone/image/${encodeURIComponent(zone)}/${encodeURIComponent(dateId)}`)
+        fetch(`/api/zone/image/${encodeURIComponent(zone)}/${encodeURIComponent(dateId)}`, { cache: 'no-store' })
             .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
             .then(blob => {
                 // Guard: discard result if user switched to a different zone while fetching
@@ -3598,7 +3598,7 @@
                 let data = layoutResponseCache.get(requestedLayoutKey);
                 if (!data) {
                     let pending = pendingLayoutRequests.get(requestedLayoutKey);
-                    if (!pending) { pending = (async () => { const response = await timedFetch(layoutUrl, {}, 'layout-data'); return response.json(); })(); pendingLayoutRequests.set(requestedLayoutKey, pending); }
+                    if (!pending) { pending = (async () => { const response = await timedFetch(layoutUrl, { cache: 'no-store' }, 'layout-data'); return response.json(); })(); pendingLayoutRequests.set(requestedLayoutKey, pending); }
                     try { data = await pending; } finally { pendingLayoutRequests.delete(requestedLayoutKey); }
                     if (!data.error) setLimitedCacheEntry(layoutResponseCache, requestedLayoutKey, data, 60);
                 }
@@ -3619,7 +3619,7 @@
                     let blob = layoutImageBlobCache.get(baseImageUrl);
                     if (!blob) {
                         let pendingImageFetch = pendingLayoutImageRequests.get(baseImageUrl);
-                        if (!pendingImageFetch) { pendingImageFetch = (async () => { const imageResponse = await timedFetch(baseImageUrl, {}, 'layout-image'); if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`); return imageResponse.blob(); })(); pendingLayoutImageRequests.set(baseImageUrl, pendingImageFetch); }
+                        if (!pendingImageFetch) { pendingImageFetch = (async () => { const imageResponse = await timedFetch(baseImageUrl, { cache: 'no-store' }, 'layout-image'); if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`); return imageResponse.blob(); })(); pendingLayoutImageRequests.set(baseImageUrl, pendingImageFetch); }
                         try { blob = await pendingImageFetch; } finally { pendingLayoutImageRequests.delete(baseImageUrl); }
                         setLimitedCacheEntry(layoutImageBlobCache, baseImageUrl, blob, 20);
                     }
