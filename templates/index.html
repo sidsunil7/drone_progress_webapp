@@ -1429,16 +1429,22 @@
 
     function syncTimelineUI(index, dates) {
         if (!dates || !dates.length) return;
-        const pct = index / Math.max(dates.length - 1, 1) * 100;
-        document.getElementById('tl-fill').style.width = pct + '%';
-        document.getElementById('cur-date').textContent    = dates[index].display || '';
+        const safeIndex = Math.max(0, Math.min(parseInt(index, 10) || 0, dates.length - 1));
+        const current = dates[safeIndex] || {};
+        const pct = safeIndex / Math.max(dates.length - 1, 1) * 100;
+
+        const fillEl = document.getElementById('tl-fill');
+        if (fillEl) fillEl.style.width = pct + '%';
+        const curDateEl = document.getElementById('cur-date');
+        if (curDateEl) curDateEl.textContent = current.display || current.label || '';
 
         // labels
         const lblEl = document.getElementById('tl-labels');
+        if (!lblEl) return;
         lblEl.innerHTML = '';
         dates.forEach((d, i) => {
             const s = document.createElement('span');
-            s.className = 'tl-label' + (i === index ? ' active' : '');
+            s.className = 'tl-label' + (i === safeIndex ? ' active' : '');
             s.textContent = d.label || d.display || '';
             s.addEventListener('click', () => {
                 const slider = document.getElementById('timelineSlider');
@@ -1454,9 +1460,9 @@
         dates.forEach((d, i) => {
             const dot = document.createElement('div');
             dot.style.left = `${i / Math.max(dates.length - 1, 1) * 100}%`;
-            if (i === index) {
+            if (i === safeIndex) {
                 dot.className = 'tl-dot active';
-            } else if (i < index) {
+            } else if (i < safeIndex) {
                 dot.className = 'tl-dot past';
             } else {
                 dot.className = 'tl-dot future';
