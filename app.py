@@ -2825,10 +2825,18 @@ def get_zone_image(zone, date_str):
         return jsonify({'error': 'Invalid zone'}), 400
     date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
     if not date_folder_path:
-        return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
+        # When a zone has no imagery for the selected date, fallback to the
+        # most recent available zone image instead of returning a hard 404.
+        fallback_tif_path, fallback_zone_tif, fallback_web_path = find_sonrisa_zone_tif_fallback(project_layout_dir, zone)
+        if fallback_tif_path and fallback_zone_tif:
+            date_folder_path = os.path.dirname(fallback_tif_path)
+            zone_tif = fallback_zone_tif
+        else:
+            return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
+    else:
+        zone_tif = None
 
     tif_candidates = [f for f in os.listdir(date_folder_path) if f.lower().endswith('.tif')]
-    zone_tif = None
     zone_aliases = get_zone_aliases(zone)
     for alias in zone_aliases:
         target = f"{alias.lower()}_zone.tif"
