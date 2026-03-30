@@ -184,27 +184,33 @@ def atomic_write_json(file_path, payload):
 @lru_cache(maxsize=64)
 def derive_project_tracker_defaults_cached(json_path, json_sig):
     if not json_path or not os.path.exists(json_path):
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": None}
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": None}
 
     try:
         data = read_json_file(json_path, default={})
     except Exception:
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
+        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": os.path.basename(json_path)}
 
-    for table in data.get("tableDetails", []):
+    table_details = data.get("tableDetails", [])
+    total_project_trackers = len(table_details)
+
+    mw_per_tracker = None
+    modules_per_tracker = None
+    for table in table_details:
         module_wattage = safe_float(table.get("moduleWattage"))
         string_size = safe_float(table.get("stringSize"))
         string_qty = safe_float(table.get("stringQty"))
         if module_wattage and string_size and string_qty:
             modules_per_tracker = int(round(string_size * string_qty))
             mw_per_tracker = round((module_wattage * string_size * string_qty) / 1_000_000, 6)
-            return {
-                "mw_per_tracker": mw_per_tracker,
-                "modules_per_tracker": modules_per_tracker,
-                "project_json_path": os.path.basename(json_path),
-            }
+            break
 
-    return {"mw_per_tracker": None, "modules_per_tracker": None, "project_json_path": os.path.basename(json_path)}
+    return {
+        "mw_per_tracker": mw_per_tracker,
+        "modules_per_tracker": modules_per_tracker,
+        "total_project_trackers": total_project_trackers if total_project_trackers > 0 else None,
+        "project_json_path": os.path.basename(json_path),
+    }
 
 
 @lru_cache(maxsize=128)
@@ -458,6 +464,39 @@ def normalize_status(status):
     if not status:
         return ""
     return status.strip().lower().replace(" ", "_")
+
+
+def _init_stage_status_matrix():
+    return {
+        stage: {"not_started": 0, "in_progress": 0, "completed": 0}
+        for stage in PRODUCTIVITY_STAGE_KEYS
+    }
+
+
+def _accumulate_normalized_stage_progress(matrix, current_stage, current_status):
+    """Accumulate one tracker across full stage sequence progression.
+
+    Rules:
+    - earlier stages than current stage -> completed
+    - current stage -> current status
+    - later stages -> not_started
+    """
+    stage_key = (current_stage or "").strip().lower().replace(" ", "_")
+    if stage_key not in PRODUCTIVITY_STAGE_KEYS:
+        return
+    status_key = normalize_status(current_status) or "not_started"
+    if status_key not in ("not_started", "in_progress", "completed"):
+        status_key = "not_started"
+
+    current_idx = PRODUCTIVITY_STAGE_KEYS.index(stage_key)
+    for idx, stage in enumerate(PRODUCTIVITY_STAGE_KEYS):
+        if idx < current_idx:
+            mapped = "completed"
+        elif idx > current_idx:
+            mapped = "not_started"
+        else:
+            mapped = status_key
+        matrix[stage][mapped] += 1
 
 
 def compute_current_stage_from_row(row):
@@ -833,6 +872,7 @@ def build_project_settings_response(project_name):
         "updated_at": stored.get("updated_at"),
         "settings_exists": os.path.exists(settings_path),
         "project_json_path": derived.get("project_json_path"),
+        "total_project_trackers": derived.get("total_project_trackers"),
     }
     return settings
 
@@ -2597,7 +2637,7 @@ def get_block_map_bg():
         response = make_response(img_bytes)
         response.headers["Content-Type"] = content_type
         response.headers["Content-Length"] = str(len(img_bytes))
-        apply_cache_headers(response, etag, max_age=86400)
+        apply_cache_headers(response, etag, max_age=0)
     else:
         json_path = get_zone_json_path(project_layout_dir)
         zone_bounds = get_sonrisa_zone_bounds(json_path)
@@ -2611,7 +2651,7 @@ def get_block_map_bg():
         img.save(buffer, format='PNG')
         buffer.seek(0)
         response = send_file(buffer, mimetype='image/png')
-        response.headers['Cache-Control'] = f'public, max-age={DEFAULT_MAX_AGE}'
+        response.headers['Cache-Control'] = 'no-cache'
     log_timing("get_block_map_bg", request_start, project=project)
     return response
 
@@ -2629,6 +2669,7 @@ def get_site_date_summary(date_str):
 
     agg_tracker_stages = []
     agg_stage_status_counts = {}
+    agg_stage_progress_status_counts = _init_stage_status_matrix()
     total_trackers = 0
 
     for zone in available_zones:
@@ -2652,9 +2693,15 @@ def get_site_date_summary(date_str):
             agg_stage_status_counts[stage_key][status_key] = (
                 agg_stage_status_counts[stage_key].get(status_key, 0) + 1
             )
+            _accumulate_normalized_stage_progress(
+                agg_stage_progress_status_counts,
+                stage_key,
+                status_key,
+            )
 
     summary = {
         "stageStatusCounts": agg_stage_status_counts,
+        "stageProgressStatusCounts": agg_stage_progress_status_counts,
         "totalTrackers": total_trackers,
         "trackerStages": agg_tracker_stages,
     }
@@ -2704,6 +2751,7 @@ def get_site_overview():
     rows = []
     stage_counts = {}
     stage_status_counts = {}
+    stage_progress_status_counts = _init_stage_status_matrix()
     aggregation_start = time.perf_counter()
     for zone in available_zones:
         # Use most-recent folder at or before date_id so forward-filled zones are included.
@@ -2729,6 +2777,11 @@ def get_site_overview():
                     stage_status_counts[stage] = {}
                 status_norm = (status or "not_started").strip().lower().replace(" ", "_") or "not_started"
                 stage_status_counts[stage][status_norm] = stage_status_counts[stage].get(status_norm, 0) + 1
+                _accumulate_normalized_stage_progress(
+                    stage_progress_status_counts,
+                    stage,
+                    status_norm,
+                )
         pct = (completed / total * 100) if total > 0 else 0.0
         rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
     log_timing(
@@ -2754,6 +2807,7 @@ def get_site_overview():
         "zones": rows,
         "stage_counts": stage_counts,
         "stage_status_counts": stage_status_counts,
+        "stage_progress_status_counts": stage_progress_status_counts,
     })
     log_timing("site_overview_calc_response_serialize", serialize_start, project=project, date=date_id)
     log_timing("get_site_overview", request_start, project=project, date=date_id, rows=len(rows))
