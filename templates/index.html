@@ -901,6 +901,36 @@
         .data-table th:not(:first-child) { text-align: right; }
         .data-table td { padding: 4px 6px; border-bottom: 1px solid #eee; }
         .data-table td:not(:first-child) { text-align: right; }
+        .tables-stack {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+        .table-card {
+            background: #fff;
+            border: 1px solid var(--bdr);
+            border-radius: 10px;
+            box-shadow: 0 1px 6px rgba(0,0,0,0.06);
+            padding: 14px;
+        }
+        .table-card + .table-card {
+            position: relative;
+        }
+        .table-card + .table-card::before {
+            content: "";
+            position: absolute;
+            top: -8px;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: #e6ebf0;
+        }
+        .table-card h2 {
+            margin-bottom: 6px;
+        }
+        .table-card p {
+            margin-bottom: 10px;
+        }
 
         .charts-scroll { flex: 1 0 auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; min-height: max-content; }
         .chart-card { background: #fff; border-radius: 8px; border: 1px solid var(--bdr); padding: 12px; display: flex; flex-direction: column; gap: 6px; }
@@ -1165,45 +1195,55 @@
     <!-- TABLE VIEW OVERLAY -->
     <div id="tableView" class="full-view-overlay">
         <div class="full-view-inner">
-            <h2>Components Complete by Date</h2>
-            <p id="tableDescription">Each row shows how many trackers have each main construction stage fully completed on that date.</p>
-            <table id="dailyTable" class="data-table">
-                <thead><tr>
-                    <th>Date</th>
-                    <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th>
-                </tr></thead>
-                <tbody id="dailyTableBody"></tbody>
-            </table>
+            <div class="tables-stack">
+                <section class="table-card">
+                    <h2>Components Complete by Date</h2>
+                    <p id="tableDescription">Each row shows how many trackers have each main construction stage fully completed on that date.</p>
+                    <table id="dailyTable" class="data-table">
+                        <thead><tr>
+                            <th>Date</th>
+                            <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th>
+                        </tr></thead>
+                        <tbody id="dailyTableBody"></tbody>
+                    </table>
+                </section>
 
-            <h2 style="margin-top:20px">Rate of Component Completion by Date</h2>
-            <p>Daily installed trackers per stage across interpolated working days between flights.</p>
-            <table id="rateTable" class="data-table">
-                <thead><tr>
-                    <th>Date</th>
-                    <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th>
-                </tr></thead>
-                <tbody id="rateTableBody"></tbody>
-            </table>
+                <section class="table-card">
+                    <h2>Rate of Component Completion by Date</h2>
+                    <p>Daily installed trackers per stage across interpolated working days between flights.</p>
+                    <table id="rateTable" class="data-table">
+                        <thead><tr>
+                            <th>Date</th>
+                            <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th>
+                        </tr></thead>
+                        <tbody id="rateTableBody"></tbody>
+                    </table>
+                </section>
 
-            <h2 style="margin-top:20px">Productivity by Date (MH/Tracker)</h2>
-            <p>Daily man-hours per tracker using the crew assigned to each stage and the interpolated daily install rate.</p>
-            <table id="productivityTable" class="data-table">
-                <thead><tr>
-                    <th>Date</th>
-                    <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th>
-                </tr></thead>
-                <tbody id="productivityTableBody"></tbody>
-            </table>
+                <section class="table-card">
+                    <h2>Productivity by Date (MH/Tracker)</h2>
+                    <p>Daily man-hours per tracker using the crew assigned to each stage and the interpolated daily install rate.</p>
+                    <table id="productivityTable" class="data-table">
+                        <thead><tr>
+                            <th>Date</th>
+                            <th>Pile</th><th>Torque Tubes</th><th>Module Rails</th><th>Modules</th><th>MH/Tracker</th>
+                        </tr></thead>
+                        <tbody id="productivityTableBody"></tbody>
+                    </table>
+                </section>
 
-            <p id="stageCompletionEstimates" style="display:none;margin-top:12px"></p>
-            <table id="stageDatesTable" class="data-table" style="margin-top:8px">
-                <thead><tr>
-                    <th>Stage</th>
-                    <th>Estimated Completion</th>
-                    <th>Actual Completion</th>
-                </tr></thead>
-                <tbody id="stageDatesTableBody"></tbody>
-            </table>
+                <section class="table-card">
+                    <p id="stageCompletionEstimates" style="display:none;margin-top:0"></p>
+                    <table id="stageDatesTable" class="data-table" style="margin-top:8px">
+                        <thead><tr>
+                            <th>Stage</th>
+                            <th>Estimated Completion</th>
+                            <th>Actual Completion</th>
+                        </tr></thead>
+                        <tbody id="stageDatesTableBody"></tbody>
+                    </table>
+                </section>
+            </div>
         </div>
     </div>
 
@@ -3356,15 +3396,20 @@
                 const dateStr = row.date;
                 const crewConfig = manpowerByDate[dateStr] || cloneStageManpower();
                 const metrics = {};
+                let totalMh = 0;
                 stageDefinitions.forEach(stage => {
                     const crew = crewConfig[stage.key] || 0;
                     const rate = row.perStage?.[stage.key] || 0;
                     const mh = crew * HOURS_PER_DAY;
                     const mwCompleted = rate * MW_PER_TRACKER;
                     const modulesCompleted = rate * MODULES_PER_TRACKER;
+                    totalMh += mh;
                     metrics[stage.key] = { crew, rate, mh, mhPerTracker: rate > 0 ? mh / rate : null, mhPerMw: mwCompleted > 0 ? mh / mwCompleted : null, mhPerMod: modulesCompleted > 0 ? mh / modulesCompleted : null };
                 });
-                return { date: dateStr, metrics };
+                // Overall tracker productivity for the date uses completed trackers/day (solar_panel).
+                const completedTrackersRate = row.perStage?.solar_panel || 0;
+                const mhPerTracker = completedTrackersRate > 0 ? (totalMh / completedTrackersRate) : null;
+                return { date: dateStr, metrics, mhPerTracker };
             });
         }
 
@@ -3385,7 +3430,7 @@
             body.innerHTML = '';
             buildDailyProductivityRows().forEach(row => {
                 const tr = document.createElement('tr');
-                tr.innerHTML = `<td style="padding:4px 6px;border-bottom:1px solid #eee">${row.date}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.pile.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.torque_tube.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.module_rails.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.solar_panel.mhPerTracker)}</td>`;
+                tr.innerHTML = `<td style="padding:4px 6px;border-bottom:1px solid #eee">${row.date}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.pile.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.torque_tube.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.module_rails.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.metrics.solar_panel.mhPerTracker)}</td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right">${formatNumericValue(row.mhPerTracker)}</td>`;
                 body.appendChild(tr);
             });
         }
