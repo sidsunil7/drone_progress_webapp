@@ -4,6 +4,7 @@ import json
 import csv
 import mimetypes
 import subprocess
+import tempfile
 import rasterio
 from rasterio.warp import transform as rio_transform
 import numpy as np
@@ -58,7 +59,19 @@ HLS_MANIFEST_EXTENSIONS = {".m3u8"}
 HLS_ASSET_EXTENSIONS = {".m3u8", ".ts", ".m4s", ".aac", ".mp4", ".vtt", ".key"}
 ZONE_VIDEO_SOURCE_DIR = os.environ.get("ZONE_VIDEO_SOURCE_DIR", "")
 ZONE_VIDEO_DEFAULT_SUBDIR = os.environ.get("ZONE_VIDEO_DEFAULT_SUBDIR", "Videos")
-VIDEO_TRANSCODE_CACHE_DIR = os.path.join(BASE_DIR, ".video_cache")
+# Use the system temp dir so the cache is always on fast local disk,
+# never on a network File Share mount (Azure App Service, etc.).
+VIDEO_TRANSCODE_CACHE_DIR = os.environ.get(
+    "VIDEO_TRANSCODE_CACHE_DIR",
+    os.path.join(tempfile.gettempdir(), "drone_video_cache"),
+)
+# Set DISABLE_VIDEO_TRANSCODE=1 to skip ffprobe/ffmpeg entirely and serve
+# the original file directly (useful when files are already H.264).
+DISABLE_VIDEO_TRANSCODE = os.environ.get("DISABLE_VIDEO_TRANSCODE", "").strip() in ("1", "true", "yes")
+
+# In-memory cache: abs_path -> (codec_name, codec_tag)
+# Codec never changes for a given file, so caching for the server lifetime is safe.
+_probe_cache: dict = {}
 
 
 def log_timing(label, start_time, **context):
@@ -109,72 +122,98 @@ def optional_file_signature(file_path):
 
 
 def probe_video_codec(file_path):
+    """Run ffprobe to detect the video codec. Results are cached in _probe_cache."""
+    if file_path in _probe_cache:
+        return _probe_cache[file_path]
     try:
         result = subprocess.run(
             [
                 "ffprobe",
-                "-v",
-                "error",
-                "-select_streams",
-                "v:0",
-                "-show_entries",
-                "stream=codec_name,codec_tag_string",
-                "-of",
-                "json",
+                "-v", "error",
+                "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,codec_tag_string",
+                "-of", "json",
                 file_path,
             ],
             capture_output=True,
             text=True,
             check=True,
+            timeout=15,
         )
         payload = json.loads(result.stdout or "{}")
         streams = payload.get("streams") or []
         if not streams:
+            _probe_cache[file_path] = (None, None)
             return None, None
         stream = streams[0] or {}
-        return stream.get("codec_name"), stream.get("codec_tag_string")
+        result_val = (stream.get("codec_name"), stream.get("codec_tag_string"))
+        _probe_cache[file_path] = result_val
+        return result_val
     except Exception:
+        _probe_cache[file_path] = (None, None)
         return None, None
 
 
 def get_or_create_browser_compatible_video(source_path):
+    """Return the path to serve for a video clip.
+
+    Strategy:
+    1. If DISABLE_VIDEO_TRANSCODE is set, serve the original immediately
+       (use this when files are already H.264, e.g. pre-converted before upload).
+    2. Build a stable cache key. If a transcoded H.264 copy already exists in
+       the local-disk cache dir (system temp), serve it immediately — no
+       ffprobe/ffmpeg needed. This is the fast path for all repeat requests.
+    3. Otherwise probe the codec (result cached in _probe_cache for the server
+       lifetime so ffprobe only runs once per unique file path).
+       - If the codec is already browser-safe (H.264/etc.), serve the original.
+       - If it needs transcoding (mp4v/mpeg4), run ffmpeg synchronously so we
+         always serve the H.264 copy on this request. ffmpeg writes to the
+         system temp dir, not the File Share, so it's fast on Azure.
+    """
     if not source_path or not os.path.exists(source_path):
         return source_path
-    codec_name, codec_tag = probe_video_codec(source_path)
-    # Browser support is unreliable for mp4v/mpeg4; convert to H.264 MP4.
-    if codec_name != "mpeg4" and codec_tag != "mp4v":
+
+    if DISABLE_VIDEO_TRANSCODE:
         return source_path
-    os.makedirs(VIDEO_TRANSCODE_CACHE_DIR, exist_ok=True)
+
+    # Derive a stable cache path from the source file's identity.
     source_sig = get_file_signature(source_path)
     cache_key = build_etag("browser-video", source_path, source_sig).strip('"')
+    os.makedirs(VIDEO_TRANSCODE_CACHE_DIR, exist_ok=True)
     target_path = os.path.join(VIDEO_TRANSCODE_CACHE_DIR, f"{cache_key}.mp4")
+
+    # Fast path: transcoded copy already on local disk — serve with no I/O.
     if os.path.exists(target_path):
         return target_path
+
+    # Probe codec once per file (result cached in memory).
+    codec_name, codec_tag = probe_video_codec(source_path)
+    needs_transcode = (codec_name == "mpeg4" or codec_tag == "mp4v")
+    if not needs_transcode:
+        return source_path
+
+    # Transcode synchronously so the response is always H.264.
+    # Writes to system temp dir (fast local SSD even on Azure App Service).
+    # Keep the .mp4 extension on the temp file so ffmpeg can infer the container.
+    tmp_path = target_path + ".tmp.mp4"
     cmd = [
-        "ffmpeg",
-        "-y",
-        "-i",
-        source_path,
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "23",
-        "-movflags",
-        "+faststart",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        target_path,
+        "ffmpeg", "-y", "-i", source_path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-movflags", "+faststart",
+        "-c:a", "aac", "-b:a", "128k",
+        tmp_path,
     ]
     try:
-        subprocess.run(cmd, capture_output=True, check=True)
-        if os.path.exists(target_path):
+        subprocess.run(cmd, capture_output=True, check=True, timeout=600)
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, target_path)
             return target_path
     except Exception:
-        return source_path
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     return source_path
 
 
@@ -1555,24 +1594,33 @@ def _is_video_asset_dir(path):
     return False
 
 
-def resolve_zone_video_root(project_layout_dir, date_str):
+def resolve_zone_video_roots(project_layout_dir, date_str):
     if not project_layout_dir or not os.path.isdir(project_layout_dir):
-        return None
+        return []
     target_date, _ = split_sonrisa_date_time(date_str)
     if not target_date:
-        return None
+        return []
+    roots = []
+    seen = set()
+    def _add_root(path):
+        if not path:
+            return
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            return
+        if _is_video_asset_dir(abs_path):
+            seen.add(abs_path)
+            roots.append(abs_path)
 
     source_dir_cfg = (ZONE_VIDEO_SOURCE_DIR or "").strip()
     if source_dir_cfg:
         configured = source_dir_cfg.format(date=target_date)
         candidate = configured if os.path.isabs(configured) else os.path.join(project_layout_dir, configured)
-        if _is_video_asset_dir(candidate):
-            return candidate
+        _add_root(candidate)
 
     if target_date == MARCH19_VIDEO_DATE:
         candidate = os.path.join(project_layout_dir, MARCH19_VIDEO_FOLDER)
-        if _is_video_asset_dir(candidate):
-            return candidate
+        _add_root(candidate)
 
     for item in sorted(os.listdir(project_layout_dir)):
         item_path = os.path.join(project_layout_dir, item)
@@ -1583,35 +1631,49 @@ def resolve_zone_video_root(project_layout_dir, date_str):
             continue
         preferred = os.path.join(item_path, ZONE_VIDEO_DEFAULT_SUBDIR)
         if _is_video_asset_dir(preferred):
-            return item_path
-        if _is_video_asset_dir(item_path):
-            return item_path
-    return None
+            _add_root(item_path)
+        elif _is_video_asset_dir(item_path):
+            _add_root(item_path)
+    return roots
+
+
+def _video_rel_matches_date(rel_path, date_str):
+    target_date, _ = split_sonrisa_date_time(date_str)
+    if not target_date:
+        return False
+    first_part = str(rel_path or "").split("/", 1)[0]
+    if not first_part:
+        return False
+    _, folder_date, _ = parse_sonrisa_folder_info(first_part.strip())
+    return folder_date == target_date
 
 
 def discover_zone_videos(project_layout_dir, date_str):
-    video_root = resolve_zone_video_root(project_layout_dir, date_str)
-    if not video_root:
+    video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
+    if not video_roots:
         return {}
     by_zone = {}
-    for root, _, files in os.walk(video_root):
-        for filename in sorted(files):
-            _, ext = os.path.splitext(filename)
-            ext = ext.lower()
-            if ext not in ZONE_VIDEO_EXTENSIONS and ext not in HLS_MANIFEST_EXTENSIONS:
-                continue
-            full_path = os.path.join(root, filename)
-            rel_path = os.path.relpath(full_path, video_root).replace(os.sep, "/")
-            zones = _extract_zone_codes_from_text(rel_path)
-            if not zones:
-                continue
-            label = os.path.splitext(os.path.basename(rel_path))[0].replace("_", " ").strip()
-            if ext in HLS_MANIFEST_EXTENSIONS:
-                clip = {"kind": "hls", "manifest_path": rel_path, "label": label}
-            else:
-                clip = {"kind": "progressive", "clip_name": rel_path, "label": label}
-            for zone in zones:
-                by_zone.setdefault(zone, []).append(clip)
+    for video_root in video_roots:
+        for root, _, files in os.walk(video_root):
+            for filename in sorted(files):
+                _, ext = os.path.splitext(filename)
+                ext = ext.lower()
+                if ext not in ZONE_VIDEO_EXTENSIONS and ext not in HLS_MANIFEST_EXTENSIONS:
+                    continue
+                full_path = os.path.join(root, filename)
+                rel_path = os.path.relpath(full_path, project_layout_dir).replace(os.sep, "/")
+                if not _video_rel_matches_date(rel_path, date_str):
+                    continue
+                zones = _extract_zone_codes_from_text(rel_path)
+                if not zones:
+                    continue
+                label = os.path.splitext(os.path.basename(rel_path))[0].replace("_", " ").strip()
+                if ext in HLS_MANIFEST_EXTENSIONS:
+                    clip = {"kind": "hls", "manifest_path": rel_path, "label": label}
+                else:
+                    clip = {"kind": "progressive", "clip_name": rel_path, "label": label}
+                for zone in zones:
+                    by_zone.setdefault(zone, []).append(clip)
     for zone, clips in by_zone.items():
         clips.sort(key=lambda item: (0 if item.get("kind") == "hls" else 1, item.get("label") or ""))
     return by_zone
@@ -3290,12 +3352,12 @@ def get_zone_video(zone, date_str, clip_name):
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
-    video_root = resolve_zone_video_root(project_layout_dir, date_str)
-    if not video_root:
+    video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
+    if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
     if not clip_name:
         return jsonify({'error': 'Invalid clip path'}), 400
-    clip_path, normalized_rel = _resolve_zone_video_path(video_root, clip_name)
+    clip_path, normalized_rel = _resolve_zone_video_path(project_layout_dir, clip_name)
     if not clip_path:
         return jsonify({'error': 'Invalid clip path'}), 400
     if not os.path.exists(clip_path) or not os.path.isfile(clip_path):
@@ -3303,6 +3365,8 @@ def get_zone_video(zone, date_str, clip_name):
     _, ext = os.path.splitext(clip_path)
     if ext.lower() not in ZONE_VIDEO_EXTENSIONS:
         return jsonify({'error': 'Unsupported video format'}), 400
+    if not _video_rel_matches_date(normalized_rel, date_str):
+        return jsonify({'error': 'Video clip does not match requested date'}), 404
     if not _zone_matches_video_path(zone, normalized_rel):
         return jsonify({'error': 'Video clip does not match requested zone'}), 404
 
@@ -3329,16 +3393,18 @@ def get_zone_video_hls_manifest(zone, date_str, manifest_path):
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
-    video_root = resolve_zone_video_root(project_layout_dir, date_str)
-    if not video_root:
+    video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
+    if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
-    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(video_root, manifest_path)
+    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(project_layout_dir, manifest_path)
     if not manifest_abs_path:
         return jsonify({'error': 'Invalid manifest path'}), 400
     if not os.path.exists(manifest_abs_path) or not os.path.isfile(manifest_abs_path):
         return jsonify({'error': 'Manifest not found'}), 404
     if os.path.splitext(manifest_abs_path)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
         return jsonify({'error': 'Unsupported manifest format'}), 400
+    if not _video_rel_matches_date(normalized_manifest, date_str):
+        return jsonify({'error': 'Manifest does not match requested date'}), 404
     if not _zone_matches_video_path(zone, normalized_manifest):
         return jsonify({'error': 'Manifest does not match requested zone'}), 404
 
@@ -3366,15 +3432,17 @@ def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path):
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
-    video_root = resolve_zone_video_root(project_layout_dir, date_str)
-    if not video_root:
+    video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
+    if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
 
-    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(video_root, manifest_path)
+    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(project_layout_dir, manifest_path)
     if not manifest_abs_path:
         return jsonify({'error': 'Invalid manifest path'}), 400
     if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
         return jsonify({'error': 'Unsupported manifest format'}), 400
+    if not _video_rel_matches_date(normalized_manifest, date_str):
+        return jsonify({'error': 'Manifest does not match requested date'}), 404
     if not _zone_matches_video_path(zone, normalized_manifest):
         return jsonify({'error': 'Manifest does not match requested zone'}), 404
 
@@ -3385,7 +3453,7 @@ def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path):
     if manifest_dir and not joined_asset_rel.startswith(f"{manifest_dir}/") and joined_asset_rel != manifest_dir:
         return jsonify({'error': 'Asset path outside manifest directory'}), 400
 
-    asset_abs_path, normalized_asset = _resolve_zone_video_path(video_root, joined_asset_rel)
+    asset_abs_path, normalized_asset = _resolve_zone_video_path(project_layout_dir, joined_asset_rel)
     if not asset_abs_path:
         return jsonify({'error': 'Invalid asset path'}), 400
     if not os.path.exists(asset_abs_path) or not os.path.isfile(asset_abs_path):
