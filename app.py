@@ -1,4 +1,4 @@
-from flask import Flask, render_template, send_file, jsonify, request, make_response
+from flask import Flask, render_template, send_file, jsonify, request, make_response, redirect
 import os
 import json
 import csv
@@ -68,6 +68,18 @@ VIDEO_TRANSCODE_CACHE_DIR = os.environ.get(
 # Set DISABLE_VIDEO_TRANSCODE=1 to skip ffprobe/ffmpeg entirely and serve
 # the original file directly (useful when files are already H.264).
 DISABLE_VIDEO_TRANSCODE = os.environ.get("DISABLE_VIDEO_TRANSCODE", "").strip() in ("1", "true", "yes")
+
+# Azure File Share SAS redirect config.
+# When all three are set, video requests return a 302 redirect to a short-lived
+# SAS URL so the browser downloads directly from Azure Storage (bypasses Flask).
+AZURE_STORAGE_ACCOUNT = os.environ.get("AZURE_STORAGE_ACCOUNT", "").strip()
+AZURE_STORAGE_KEY      = os.environ.get("AZURE_STORAGE_KEY", "").strip()
+AZURE_FILE_SHARE_NAME  = os.environ.get("AZURE_FILE_SHARE_NAME", "").strip()
+# The local path where the Azure File Share is mounted on the server.
+# On Azure App Service the default mount is /home/ (maps to share root).
+AZURE_FILE_SHARE_MOUNT = os.environ.get("AZURE_FILE_SHARE_MOUNT", "/home/").rstrip("/") + "/"
+# SAS token validity in minutes (default 60).
+AZURE_SAS_EXPIRY_MINUTES = int(os.environ.get("AZURE_SAS_EXPIRY_MINUTES", "60"))
 
 # In-memory cache: abs_path -> (codec_name, codec_tag)
 # Codec never changes for a given file, so caching for the server lifetime is safe.
@@ -215,6 +227,47 @@ def get_or_create_browser_compatible_video(source_path):
             except OSError:
                 pass
     return source_path
+
+
+def build_azure_sas_video_url(abs_file_path):
+    """Return a short-lived Azure File Share SAS URL for abs_file_path, or None.
+
+    Requires AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY, and AZURE_FILE_SHARE_NAME
+    to be set.  The file path is mapped to the share by stripping the local mount
+    prefix (AZURE_FILE_SHARE_MOUNT).
+
+    Example mapping:
+      AZURE_FILE_SHARE_MOUNT = /home/
+      abs_file_path = /home/site/wwwroot/layout_data/Sonrisa/Flight_.../video.mp4
+      → share-relative path = site/wwwroot/layout_data/Sonrisa/Flight_.../video.mp4
+    """
+    if not (AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY and AZURE_FILE_SHARE_NAME):
+        return None
+    norm = os.path.abspath(abs_file_path)
+    if not norm.startswith(AZURE_FILE_SHARE_MOUNT):
+        return None
+    rel = norm[len(AZURE_FILE_SHARE_MOUNT):]   # strip mount prefix → share-relative
+    # Split into directory path and file name as required by generate_file_sas.
+    parts = rel.replace("\\", "/").split("/")
+    file_name = parts[-1]
+    dir_path  = "/".join(parts[:-1]) if len(parts) > 1 else ""
+    try:
+        from azure.storage.fileshare import generate_file_sas, FileSasPermissions
+        from datetime import timedelta
+        sas = generate_file_sas(
+            account_name=AZURE_STORAGE_ACCOUNT,
+            share_name=AZURE_FILE_SHARE_NAME,
+            file_path=[dir_path, file_name] if dir_path else [file_name],
+            account_key=AZURE_STORAGE_KEY,
+            permission=FileSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(minutes=AZURE_SAS_EXPIRY_MINUTES),
+        )
+        return (
+            f"https://{AZURE_STORAGE_ACCOUNT}.file.core.windows.net"
+            f"/{AZURE_FILE_SHARE_NAME}/{rel}?{sas}"
+        )
+    except Exception:
+        return None
 
 
 def utc_now_iso():
@@ -3369,6 +3422,15 @@ def get_zone_video(zone, date_str, clip_name):
         return jsonify({'error': 'Video clip does not match requested date'}), 404
     if not _zone_matches_video_path(zone, normalized_rel):
         return jsonify({'error': 'Video clip does not match requested zone'}), 404
+
+    # If Azure credentials are configured, redirect the browser directly to a
+    # short-lived SAS URL on Azure File Share.  This bypasses Flask entirely:
+    # the browser streams the video straight from Azure Storage without proxying
+    # every byte through the App Service, which removes the main bottleneck.
+    sas_url = build_azure_sas_video_url(clip_path)
+    if sas_url:
+        log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="302_sas")
+        return redirect(sas_url, code=302)
 
     serve_path = get_or_create_browser_compatible_video(clip_path)
     clip_sig = get_file_signature(serve_path)
