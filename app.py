@@ -2,6 +2,8 @@ from flask import Flask, render_template, send_file, jsonify, request, make_resp
 import os
 import json
 import csv
+import mimetypes
+import subprocess
 import rasterio
 from rasterio.warp import transform as rio_transform
 import numpy as np
@@ -11,6 +13,7 @@ import base64
 import re
 import time
 import hashlib
+from urllib.parse import quote
 from datetime import datetime, timezone
 from functools import lru_cache
 
@@ -48,6 +51,14 @@ DEFAULT_HOURS_PER_DAY = 10
 VALID_PROJECT_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _-]{0,79}$")
 WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 PRODUCTIVITY_STAGE_KEYS = ["pile", "torque_tube", "module_rails", "solar_panel"]
+MARCH19_VIDEO_DATE = "20260319"
+MARCH19_VIDEO_FOLDER = "Flight_18-20-31-32_20260319"
+ZONE_VIDEO_EXTENSIONS = {".mp4", ".mov", ".m4v", ".webm"}
+HLS_MANIFEST_EXTENSIONS = {".m3u8"}
+HLS_ASSET_EXTENSIONS = {".m3u8", ".ts", ".m4s", ".aac", ".mp4", ".vtt", ".key"}
+ZONE_VIDEO_SOURCE_DIR = os.environ.get("ZONE_VIDEO_SOURCE_DIR", "")
+ZONE_VIDEO_DEFAULT_SUBDIR = os.environ.get("ZONE_VIDEO_DEFAULT_SUBDIR", "Videos")
+VIDEO_TRANSCODE_CACHE_DIR = os.path.join(BASE_DIR, ".video_cache")
 
 
 def log_timing(label, start_time, **context):
@@ -95,6 +106,76 @@ def optional_file_signature(file_path):
     if not file_path or not os.path.exists(file_path):
         return (0, 0)
     return get_file_signature(file_path)
+
+
+def probe_video_codec(file_path):
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=codec_name,codec_tag_string",
+                "-of",
+                "json",
+                file_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") or []
+        if not streams:
+            return None, None
+        stream = streams[0] or {}
+        return stream.get("codec_name"), stream.get("codec_tag_string")
+    except Exception:
+        return None, None
+
+
+def get_or_create_browser_compatible_video(source_path):
+    if not source_path or not os.path.exists(source_path):
+        return source_path
+    codec_name, codec_tag = probe_video_codec(source_path)
+    # Browser support is unreliable for mp4v/mpeg4; convert to H.264 MP4.
+    if codec_name != "mpeg4" and codec_tag != "mp4v":
+        return source_path
+    os.makedirs(VIDEO_TRANSCODE_CACHE_DIR, exist_ok=True)
+    source_sig = get_file_signature(source_path)
+    cache_key = build_etag("browser-video", source_path, source_sig).strip('"')
+    target_path = os.path.join(VIDEO_TRANSCODE_CACHE_DIR, f"{cache_key}.mp4")
+    if os.path.exists(target_path):
+        return target_path
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        source_path,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-movflags",
+        "+faststart",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        target_path,
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, check=True)
+        if os.path.exists(target_path):
+            return target_path
+    except Exception:
+        return source_path
+    return source_path
 
 
 def utc_now_iso():
@@ -1431,6 +1512,151 @@ def find_sonrisa_date_folder(project_layout_dir, zone, date_str):
     return None
 
 
+def _extract_zone_codes_from_text(value):
+    if not value:
+        return []
+    zones = set()
+    for match in re.finditer(r"(?i)(?:^|[^A-Za-z0-9])zone[_-]?(\d{1,2})(?=[^A-Za-z0-9]|$)", value):
+        normalized = normalize_zone_code(f"G{match.group(1)}")
+        if normalized:
+            zones.add(normalized)
+    for match in re.finditer(r"(?i)(?:^|[^A-Za-z0-9])([ag])[_-]?(\d{1,2})(?=[^A-Za-z0-9]|$)", value):
+        normalized = normalize_zone_code(f"{match.group(1)}{match.group(2)}")
+        if normalized:
+            zones.add(normalized)
+    return sorted(zones)
+
+
+def _resolve_zone_video_path(video_root, rel_path):
+    if not rel_path or rel_path.startswith(("/", "\\")):
+        return None, None
+    normalized_rel = os.path.normpath(rel_path).replace("\\", "/")
+    if normalized_rel.startswith("../") or normalized_rel == "..":
+        return None, None
+    target_path = os.path.normpath(os.path.join(video_root, normalized_rel))
+    root_with_sep = os.path.join(os.path.abspath(video_root), "")
+    if not os.path.abspath(target_path).startswith(root_with_sep):
+        return None, None
+    return target_path, normalized_rel
+
+
+def _zone_matches_video_path(zone, rel_path):
+    return zone in _extract_zone_codes_from_text(rel_path or "")
+
+
+def _is_video_asset_dir(path):
+    if not os.path.isdir(path):
+        return False
+    for root, _, files in os.walk(path):
+        for filename in files:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in ZONE_VIDEO_EXTENSIONS or ext in HLS_MANIFEST_EXTENSIONS:
+                return True
+    return False
+
+
+def resolve_zone_video_root(project_layout_dir, date_str):
+    if not project_layout_dir or not os.path.isdir(project_layout_dir):
+        return None
+    target_date, _ = split_sonrisa_date_time(date_str)
+    if not target_date:
+        return None
+
+    source_dir_cfg = (ZONE_VIDEO_SOURCE_DIR or "").strip()
+    if source_dir_cfg:
+        configured = source_dir_cfg.format(date=target_date)
+        candidate = configured if os.path.isabs(configured) else os.path.join(project_layout_dir, configured)
+        if _is_video_asset_dir(candidate):
+            return candidate
+
+    if target_date == MARCH19_VIDEO_DATE:
+        candidate = os.path.join(project_layout_dir, MARCH19_VIDEO_FOLDER)
+        if _is_video_asset_dir(candidate):
+            return candidate
+
+    for item in sorted(os.listdir(project_layout_dir)):
+        item_path = os.path.join(project_layout_dir, item)
+        if not os.path.isdir(item_path):
+            continue
+        _, folder_date, _ = parse_sonrisa_folder_info(item.strip())
+        if folder_date != target_date:
+            continue
+        preferred = os.path.join(item_path, ZONE_VIDEO_DEFAULT_SUBDIR)
+        if _is_video_asset_dir(preferred):
+            return item_path
+        if _is_video_asset_dir(item_path):
+            return item_path
+    return None
+
+
+def discover_zone_videos(project_layout_dir, date_str):
+    video_root = resolve_zone_video_root(project_layout_dir, date_str)
+    if not video_root:
+        return {}
+    by_zone = {}
+    for root, _, files in os.walk(video_root):
+        for filename in sorted(files):
+            _, ext = os.path.splitext(filename)
+            ext = ext.lower()
+            if ext not in ZONE_VIDEO_EXTENSIONS and ext not in HLS_MANIFEST_EXTENSIONS:
+                continue
+            full_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(full_path, video_root).replace(os.sep, "/")
+            zones = _extract_zone_codes_from_text(rel_path)
+            if not zones:
+                continue
+            label = os.path.splitext(os.path.basename(rel_path))[0].replace("_", " ").strip()
+            if ext in HLS_MANIFEST_EXTENSIONS:
+                clip = {"kind": "hls", "manifest_path": rel_path, "label": label}
+            else:
+                clip = {"kind": "progressive", "clip_name": rel_path, "label": label}
+            for zone in zones:
+                by_zone.setdefault(zone, []).append(clip)
+    for zone, clips in by_zone.items():
+        clips.sort(key=lambda item: (0 if item.get("kind") == "hls" else 1, item.get("label") or ""))
+    return by_zone
+
+
+def _encode_rel_path_for_url(path_value):
+    return "/".join(quote(part, safe="") for part in str(path_value or "").split("/") if part not in ("", "."))
+
+
+def _rewrite_hls_manifest(manifest_text, zone, date_str, manifest_rel_path):
+    base_dir = os.path.dirname(manifest_rel_path).replace("\\", "/")
+    encoded_zone = quote(zone, safe="")
+    encoded_date = quote(date_str, safe="")
+    encoded_manifest = _encode_rel_path_for_url(manifest_rel_path)
+
+    def to_asset_url(asset_ref):
+        if not asset_ref:
+            return asset_ref
+        ref = asset_ref.strip()
+        if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*://", ref):
+            return ref
+        joined = os.path.normpath(os.path.join(base_dir, ref)).replace("\\", "/")
+        if joined.startswith("../") or joined == "..":
+            return ref
+        encoded_asset = _encode_rel_path_for_url(joined)
+        return f"/api/zone/video/hls_asset/{encoded_zone}/{encoded_date}/{encoded_manifest}/{encoded_asset}"
+
+    rewritten_lines = []
+    for line in manifest_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            rewritten_lines.append(line)
+            continue
+        if stripped.startswith("#"):
+            if "URI=" in line:
+                def _repl(match):
+                    original = match.group(1)
+                    return f'URI="{to_asset_url(original)}"'
+                line = re.sub(r'URI="([^"]+)"', _repl, line)
+            rewritten_lines.append(line)
+            continue
+        rewritten_lines.append(to_asset_url(stripped))
+    return "\n".join(rewritten_lines) + ("\n" if manifest_text.endswith("\n") else "")
+
+
 def find_sonrisa_zone_tif_fallback(project_layout_dir, zone):
     """Find zone TIFF and web JPG from another folder (e.g. G-style) when current folder (e.g. Flight-style) lacks them."""
     zone = normalize_zone_code(zone)
@@ -2640,6 +2866,7 @@ def get_zones():
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
+    zone_video_map = discover_zone_videos(project_layout_dir, date_id) if date_id else {}
     serialize_start = time.perf_counter()
     response = jsonify({
         'zones': [
@@ -2652,7 +2879,9 @@ def get_zones():
                     'max_lon': bounds[3]
                 },
                 'available': zone in available_zones,
-                'stage': zone_stage.get(zone)
+                'stage': zone_stage.get(zone),
+                'video_clips': zone_video_map.get(zone, []),
+                'has_video': bool(zone_video_map.get(zone)),
             }
             for zone, bounds in sorted(zone_bounds.items())
         ],
@@ -3050,6 +3279,140 @@ def get_zone_image(zone, date_str):
     except Exception as e:
         log_timing("get_sonrisa_image_failed", request_start, zone=zone, date=date_str, tif=zone_tif)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/zone/video/<zone>/<date_str>/<path:clip_name>')
+@app.route('/api/sonrisa/video/<zone>/<date_str>/<path:clip_name>')
+def get_zone_video(zone, date_str, clip_name):
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    zone = normalize_zone_code(zone)
+    if not zone:
+        return jsonify({'error': 'Invalid zone'}), 400
+    video_root = resolve_zone_video_root(project_layout_dir, date_str)
+    if not video_root:
+        return jsonify({'error': 'No zone videos for this date'}), 404
+    if not clip_name:
+        return jsonify({'error': 'Invalid clip path'}), 400
+    clip_path, normalized_rel = _resolve_zone_video_path(video_root, clip_name)
+    if not clip_path:
+        return jsonify({'error': 'Invalid clip path'}), 400
+    if not os.path.exists(clip_path) or not os.path.isfile(clip_path):
+        return jsonify({'error': 'Video clip not found'}), 404
+    _, ext = os.path.splitext(clip_path)
+    if ext.lower() not in ZONE_VIDEO_EXTENSIONS:
+        return jsonify({'error': 'Unsupported video format'}), 400
+    if not _zone_matches_video_path(zone, normalized_rel):
+        return jsonify({'error': 'Video clip does not match requested zone'}), 404
+
+    serve_path = get_or_create_browser_compatible_video(clip_path)
+    clip_sig = get_file_signature(serve_path)
+    etag = build_etag("zone-video", project, zone, date_str, normalized_rel, clip_sig)
+    if request_etag_matches(etag):
+        log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="304")
+        return make_not_modified_response(etag)
+
+    mimetype, _ = mimetypes.guess_type(serve_path)
+    response = send_file(serve_path, mimetype=(mimetype or "video/mp4"), conditional=True)
+    apply_cache_headers(response, etag)
+    log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel)
+    return response
+
+
+@app.route('/api/zone/video/hls/<zone>/<date_str>/<path:manifest_path>')
+@app.route('/api/sonrisa/video/hls/<zone>/<date_str>/<path:manifest_path>')
+def get_zone_video_hls_manifest(zone, date_str, manifest_path):
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    zone = normalize_zone_code(zone)
+    if not zone:
+        return jsonify({'error': 'Invalid zone'}), 400
+    video_root = resolve_zone_video_root(project_layout_dir, date_str)
+    if not video_root:
+        return jsonify({'error': 'No zone videos for this date'}), 404
+    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(video_root, manifest_path)
+    if not manifest_abs_path:
+        return jsonify({'error': 'Invalid manifest path'}), 400
+    if not os.path.exists(manifest_abs_path) or not os.path.isfile(manifest_abs_path):
+        return jsonify({'error': 'Manifest not found'}), 404
+    if os.path.splitext(manifest_abs_path)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+        return jsonify({'error': 'Unsupported manifest format'}), 400
+    if not _zone_matches_video_path(zone, normalized_manifest):
+        return jsonify({'error': 'Manifest does not match requested zone'}), 404
+
+    manifest_sig = get_file_signature(manifest_abs_path)
+    etag = build_etag("zone-hls-manifest", project, zone, date_str, normalized_manifest, manifest_sig)
+    if request_etag_matches(etag):
+        return make_not_modified_response(etag)
+
+    with open(manifest_abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+        manifest_text = handle.read()
+    rewritten_manifest = _rewrite_hls_manifest(manifest_text, zone, date_str, normalized_manifest)
+    response = make_response(rewritten_manifest)
+    response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+    apply_cache_headers(response, etag)
+    log_timing("get_zone_video_hls_manifest", request_start, project=project, zone=zone, date=date_str, manifest=normalized_manifest)
+    return response
+
+
+@app.route('/api/zone/video/hls_asset/<zone>/<date_str>/<path:manifest_path>/<path:asset_path>')
+@app.route('/api/sonrisa/video/hls_asset/<zone>/<date_str>/<path:manifest_path>/<path:asset_path>')
+def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path):
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    zone = normalize_zone_code(zone)
+    if not zone:
+        return jsonify({'error': 'Invalid zone'}), 400
+    video_root = resolve_zone_video_root(project_layout_dir, date_str)
+    if not video_root:
+        return jsonify({'error': 'No zone videos for this date'}), 404
+
+    manifest_abs_path, normalized_manifest = _resolve_zone_video_path(video_root, manifest_path)
+    if not manifest_abs_path:
+        return jsonify({'error': 'Invalid manifest path'}), 400
+    if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+        return jsonify({'error': 'Unsupported manifest format'}), 400
+    if not _zone_matches_video_path(zone, normalized_manifest):
+        return jsonify({'error': 'Manifest does not match requested zone'}), 404
+
+    manifest_dir = os.path.dirname(normalized_manifest)
+    joined_asset_rel = os.path.normpath(os.path.join(manifest_dir, asset_path)).replace("\\", "/")
+    if joined_asset_rel.startswith("../") or joined_asset_rel == "..":
+        return jsonify({'error': 'Invalid asset path'}), 400
+    if manifest_dir and not joined_asset_rel.startswith(f"{manifest_dir}/") and joined_asset_rel != manifest_dir:
+        return jsonify({'error': 'Asset path outside manifest directory'}), 400
+
+    asset_abs_path, normalized_asset = _resolve_zone_video_path(video_root, joined_asset_rel)
+    if not asset_abs_path:
+        return jsonify({'error': 'Invalid asset path'}), 400
+    if not os.path.exists(asset_abs_path) or not os.path.isfile(asset_abs_path):
+        return jsonify({'error': 'Asset not found'}), 404
+    asset_ext = os.path.splitext(asset_abs_path)[1].lower()
+    if asset_ext not in HLS_ASSET_EXTENSIONS:
+        return jsonify({'error': 'Unsupported HLS asset format'}), 400
+
+    asset_sig = get_file_signature(asset_abs_path)
+    etag = build_etag("zone-hls-asset", project, zone, date_str, normalized_manifest, normalized_asset, asset_sig)
+    if request_etag_matches(etag):
+        return make_not_modified_response(etag)
+
+    mime_map = {
+        ".m3u8": "application/vnd.apple.mpegurl",
+        ".ts": "video/mp2t",
+        ".m4s": "video/iso.segment",
+        ".aac": "audio/aac",
+        ".vtt": "text/vtt",
+        ".key": "application/octet-stream",
+    }
+    mimetype = mime_map.get(asset_ext) or mimetypes.guess_type(asset_abs_path)[0] or "application/octet-stream"
+    response = send_file(asset_abs_path, mimetype=mimetype, conditional=True)
+    apply_cache_headers(response, etag)
+    log_timing("get_zone_video_hls_asset", request_start, project=project, zone=zone, date=date_str, asset=normalized_asset)
+    return response
+
 
 @app.route('/api/tracker/<date_str>/<tracker_id>')
 def get_tracker_image(date_str, tracker_id):
