@@ -5,7 +5,6 @@ import csv
 import mimetypes
 import subprocess
 import tempfile
-import threading
 import rasterio
 from rasterio.warp import transform as rio_transform
 import numpy as np
@@ -73,9 +72,6 @@ DISABLE_VIDEO_TRANSCODE = os.environ.get("DISABLE_VIDEO_TRANSCODE", "").strip() 
 # In-memory cache: abs_path -> (codec_name, codec_tag)
 # Codec never changes for a given file, so caching for the server lifetime is safe.
 _probe_cache: dict = {}
-# Tracks files currently being transcoded so we don't launch duplicate jobs.
-_transcode_in_progress: set = set()
-_transcode_lock = threading.Lock()
 
 
 def log_timing(label, start_time, **context):
@@ -158,42 +154,21 @@ def probe_video_codec(file_path):
         return None, None
 
 
-def _run_ffmpeg_transcode(source_path, target_path):
-    """Background worker: transcode source → H.264 MP4 at target_path."""
-    tmp_path = target_path + ".tmp"
-    try:
-        cmd = [
-            "ffmpeg", "-y", "-i", source_path,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-movflags", "+faststart",
-            "-c:a", "aac", "-b:a", "128k",
-            tmp_path,
-        ]
-        subprocess.run(cmd, capture_output=True, check=True, timeout=600)
-        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
-            os.replace(tmp_path, target_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
-    finally:
-        with _transcode_lock:
-            _transcode_in_progress.discard(source_path)
-
-
 def get_or_create_browser_compatible_video(source_path):
     """Return the path to serve for a video clip.
 
-    Strategy (non-blocking):
-    1. If DISABLE_VIDEO_TRANSCODE is set, serve the original immediately.
-    2. Build a stable cache key. If a transcoded H.264 copy already exists in the
-       local-disk cache dir, serve that — no ffprobe/ffmpeg needed.
-    3. Otherwise probe the codec (cached in memory after first call).
-       - If the codec is already browser-safe, serve the original.
-       - If it needs transcoding, kick off a background thread and return the
-         original for this request so the response is immediate.
+    Strategy:
+    1. If DISABLE_VIDEO_TRANSCODE is set, serve the original immediately
+       (use this when files are already H.264, e.g. pre-converted before upload).
+    2. Build a stable cache key. If a transcoded H.264 copy already exists in
+       the local-disk cache dir (system temp), serve it immediately — no
+       ffprobe/ffmpeg needed. This is the fast path for all repeat requests.
+    3. Otherwise probe the codec (result cached in _probe_cache for the server
+       lifetime so ffprobe only runs once per unique file path).
+       - If the codec is already browser-safe (H.264/etc.), serve the original.
+       - If it needs transcoding (mp4v/mpeg4), run ffmpeg synchronously so we
+         always serve the H.264 copy on this request. ffmpeg writes to the
+         system temp dir, not the File Share, so it's fast on Azure.
     """
     if not source_path or not os.path.exists(source_path):
         return source_path
@@ -207,28 +182,38 @@ def get_or_create_browser_compatible_video(source_path):
     os.makedirs(VIDEO_TRANSCODE_CACHE_DIR, exist_ok=True)
     target_path = os.path.join(VIDEO_TRANSCODE_CACHE_DIR, f"{cache_key}.mp4")
 
-    # Fast path: transcoded file already on local disk.
+    # Fast path: transcoded copy already on local disk — serve with no I/O.
     if os.path.exists(target_path):
         return target_path
 
-    # Probe codec (result is cached in memory after the first call).
+    # Probe codec once per file (result cached in memory).
     codec_name, codec_tag = probe_video_codec(source_path)
     needs_transcode = (codec_name == "mpeg4" or codec_tag == "mp4v")
     if not needs_transcode:
         return source_path
 
-    # Transcode in a background thread so we don't block this request.
-    with _transcode_lock:
-        if source_path not in _transcode_in_progress:
-            _transcode_in_progress.add(source_path)
-            t = threading.Thread(
-                target=_run_ffmpeg_transcode,
-                args=(source_path, target_path),
-                daemon=True,
-            )
-            t.start()
-
-    # Return the original for now; next request will find the cached H.264 copy.
+    # Transcode synchronously so the response is always H.264.
+    # Writes to system temp dir (fast local SSD even on Azure App Service).
+    # Keep the .mp4 extension on the temp file so ffmpeg can infer the container.
+    tmp_path = target_path + ".tmp.mp4"
+    cmd = [
+        "ffmpeg", "-y", "-i", source_path,
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+        "-movflags", "+faststart",
+        "-c:a", "aac", "-b:a", "128k",
+        tmp_path,
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, check=True, timeout=600)
+        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+            os.replace(tmp_path, target_path)
+            return target_path
+    except Exception:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
     return source_path
 
 
@@ -3386,8 +3371,6 @@ def get_zone_video(zone, date_str, clip_name):
         return jsonify({'error': 'Video clip does not match requested zone'}), 404
 
     serve_path = get_or_create_browser_compatible_video(clip_path)
-    transcoding = (serve_path == clip_path and not DISABLE_VIDEO_TRANSCODE)
-
     clip_sig = get_file_signature(serve_path)
     etag = build_etag("zone-video", project, zone, date_str, normalized_rel, clip_sig)
     if request_etag_matches(etag):
@@ -3397,10 +3380,6 @@ def get_zone_video(zone, date_str, clip_name):
     mimetype, _ = mimetypes.guess_type(serve_path)
     response = send_file(serve_path, mimetype=(mimetype or "video/mp4"), conditional=True)
     apply_cache_headers(response, etag)
-    # Tell the client whether a background transcode is still in progress so it
-    # can retry after a short delay and get the H.264 copy next time.
-    if transcoding:
-        response.headers["X-Transcode-Status"] = "pending"
     log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel)
     return response
 
