@@ -741,10 +741,20 @@
             margin-bottom: 3px;
         }
         .site-stage-kpi-stage {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
             font-size: 11px;
             font-weight: 700;
             line-height: 1.2;
             color: var(--stage-color, var(--txt));
+        }
+        .site-stage-kpi-stage-legend {
+            width: 9px;
+            height: 9px;
+            border-radius: 2px;
+            background: var(--stage-color, var(--hdr));
+            flex: 0 0 auto;
         }
         .site-stage-kpi-stage-count {
             font-size: 10px;
@@ -1032,6 +1042,97 @@
         .zp-abox  { border-radius:6px; padding:8px 10px; display:flex; gap:8px; margin-top:6px; background:#eef6fa; border:1px solid #cfe2ec; }
         .zp-aico  { width:16px; height:16px; border-radius:50%; background:var(--hdr); display:flex; align-items:center; justify-content:center; color:#fff; font-size:9px; font-weight:700; flex-shrink:0; margin-top:1px; }
         .zp-atxt  { font-size:11px; line-height:1.5; color:var(--hdr); }
+
+        /* ── zone video modal + map icon ── */
+        .zone-video-modal {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(8, 20, 32, 0.72);
+            z-index: 90;
+            padding: 18px;
+        }
+        .zone-video-modal.open { display: flex; }
+        .zone-video-dialog {
+            width: min(960px, 96vw);
+            max-height: min(92vh, 800px);
+            display: flex;
+            flex-direction: column;
+            background: #fff;
+            border-radius: 10px;
+            box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+            overflow: hidden;
+        }
+        .zone-video-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 11px 14px;
+            border-bottom: 1px solid var(--bdr);
+            background: #f8fafb;
+        }
+        .zone-video-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--txt);
+        }
+        .zone-video-close {
+            border: 0;
+            background: transparent;
+            color: #64748b;
+            font-size: 24px;
+            line-height: 1;
+            cursor: pointer;
+            padding: 0 4px;
+        }
+        .zone-video-body {
+            padding: 12px;
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+            overflow: auto;
+        }
+        .zone-video-player {
+            width: 100%;
+            max-height: 70vh;
+            background: #000;
+            border-radius: 8px;
+        }
+        .zone-video-clip-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .zone-video-clip-btn {
+            border: 1px solid #cbd5e1;
+            background: #fff;
+            color: #1e293b;
+            padding: 7px 10px;
+            border-radius: 999px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .zone-video-clip-btn.active {
+            background: var(--hdr);
+            color: #fff;
+            border-color: var(--hdr);
+        }
+        .zone-video-empty {
+            font-size: 12px;
+            color: var(--txtm);
+            padding: 8px 2px;
+        }
+        .zone-video-status {
+            font-size: 12px;
+            color: #475569;
+            min-height: 16px;
+        }
+        .zone-video-status.error {
+            color: #b91c1c;
+        }
     </style>
 </head>
 <body>
@@ -1189,6 +1290,21 @@
 
         <div id="panel-footer" style="display:none">
             <button class="p-action-btn secondary" id="panel-back-to-overview-btn">← Overview</button>
+        </div>
+    </div>
+
+    <div id="zoneVideoModal" class="zone-video-modal" aria-hidden="true">
+        <div class="zone-video-dialog" role="dialog" aria-modal="true" aria-label="Zone video">
+            <div class="zone-video-head">
+                <div id="zoneVideoModalTitle" class="zone-video-title">Zone Video</div>
+                <button id="zoneVideoModalClose" class="zone-video-close" aria-label="Close video modal">×</button>
+            </div>
+            <div class="zone-video-body">
+                <video id="zoneVideoPlayer" class="zone-video-player" controls playsinline preload="metadata"></video>
+                <div id="zoneVideoStatus" class="zone-video-status"></div>
+                <div id="zoneVideoClipList" class="zone-video-clip-list"></div>
+                <div id="zoneVideoEmpty" class="zone-video-empty" style="display:none">No video clips available for this zone.</div>
+            </div>
         </div>
     </div>
 
@@ -2096,6 +2212,27 @@
         let lastZonePickerDateId = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
+        let zoneVideoIconHitboxes = [];
+        let activeZoneVideoContext = null;
+        let zoneVideoHlsInstance = null;
+        let zoneVideoHlsLoaderPromise = null;
+        let zoneVideoIconImage = null;
+        let zoneVideoIconReady = false;
+
+        function initZoneVideoIcon() {
+            if (zoneVideoIconReady) return Promise.resolve(zoneVideoIconImage);
+            return new Promise((resolve) => {
+                const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+                    <rect x="6" y="6" width="52" height="52" rx="12" fill="#014059"/>
+                    <rect x="15" y="21" width="25" height="22" rx="6" fill="#ffffff"/>
+                    <path d="M40 27 L50 22 Q52 21 52 23 L52 41 Q52 43 50 42 L40 37 Z" fill="#ffffff"/>
+                </svg>`;
+                const img = new Image();
+                img.onload = () => { zoneVideoIconImage = img; zoneVideoIconReady = true; resolve(img); };
+                img.onerror = () => { zoneVideoIconReady = false; resolve(null); };
+                img.src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+            });
+        }
 
         function getLatestDateId(dateList) {
             if (!Array.isArray(dateList) || dateList.length === 0) return null;
@@ -2122,6 +2259,7 @@
             if (!canvas || !zoneData || !zoneData.overall_bounds) return;
             const ctx = canvas.getContext('2d');
             const ob = zoneData.overall_bounds;
+            zoneVideoIconHitboxes = [];
 
             if (blockMapBgLoaded && blockMapBgImage) {
                 canvas.width = blockMapBgImage.naturalWidth;
@@ -2176,6 +2314,35 @@
                 ctx.lineWidth    = 1.5;
                 ctx.stroke();
                 ctx.restore();
+
+                const clips = Array.isArray(z.video_clips) ? z.video_clips : [];
+                if (clips.length > 0) {
+                    const iconRadius = Math.max(8, Math.min(12, Math.min(bw, bh) * 0.15));
+                    const iconPad = Math.max(3, iconRadius * 0.28);
+                    const cx = x2 - iconRadius - iconPad;
+                    const cy = y1 + iconRadius + iconPad;
+                    zoneVideoIconHitboxes.push({
+                        zone: z.zone,
+                        date: lastZonePickerDateId,
+                        x: cx,
+                        y: cy,
+                        r: iconRadius + 5,
+                        clips,
+                    });
+                    ctx.save();
+                    const iconSize = iconRadius * 2.25;
+                    const iconX = cx - (iconSize / 2);
+                    const iconY = cy - (iconSize / 2);
+                    if (zoneVideoIconImage && zoneVideoIconReady) {
+                        ctx.drawImage(zoneVideoIconImage, iconX, iconY, iconSize, iconSize);
+                    } else {
+                        ctx.beginPath();
+                        ctx.arc(cx, cy, iconRadius, 0, Math.PI * 2);
+                        ctx.fillStyle = '#000000';
+                        ctx.fill();
+                    }
+                    ctx.restore();
+                }
 
             }
             _updateZoneCanvasViewportFit();
@@ -2429,8 +2596,12 @@
             }
             /* Denominator: total trackers from info JSON, else fall back to staged total */
             const denominator = PROJECT_TOTAL_TRACKERS > 0 ? PROJECT_TOTAL_TRACKERS : stageTotalTrackers;
-            /* Rate comes from the latest working-day data point regardless of slider */
-            const latestRateDateId = workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : dateId;
+            /* Rate should reflect the latest available flight date. */
+            const latestFlightDateId = availableDates.length
+                ? (availableDates[availableDates.length - 1].display || availableDates[availableDates.length - 1].date)
+                : null;
+            const latestRateDateId = latestFlightDateId
+                || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : dateId);
             const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
                 ? siteStageProgressStatusCounts
                 : (siteStageStatusCounts || {});
@@ -2500,7 +2671,7 @@
                 const stageColor = getStageColor(stage.key);
                 return `<div class="site-stage-kpi-card ${isActiveStage ? 'active' : ''}" data-stage="${stage.key}" style="--stage-color:${stageColor}">
                     <div class="site-stage-kpi-head">
-                        <span class="site-stage-kpi-stage">${stage.label}</span>
+                        <span class="site-stage-kpi-stage"><span class="site-stage-kpi-stage-legend" aria-hidden="true"></span>${stage.label}</span>
                         ${rateText ? `<span class="site-stage-kpi-stage-count">${rateText}</span>` : ''}
                     </div>
                     <div class="site-stage-kpi-body">
@@ -2720,6 +2891,8 @@
             try {
                 setupViewTabs();
                 setupZoomControls();
+                await initZoneVideoIcon();
+                initZoneVideoModal();
                 await loadProjectSettings();
                 await loadManpowerData();
                 setupManualDateControls();
@@ -2824,6 +2997,11 @@
                     _bindZonePickerInteractions();
                     mapCanvas.addEventListener('click', (event) => {
                         if (_zmSuppressClick) { _zmSuppressClick = false; return; }
+                        const videoHit = getZoneVideoHitFromClick(event);
+                        if (videoHit) {
+                            openZoneVideoModal(videoHit.zone, lastZonePickerDateId, videoHit.clips);
+                            return;
+                        }
                         const zone = getZoneFromClick(event);
                         if (zone) selectZone(zone);
                     });
@@ -2947,8 +3125,7 @@
             } catch (error) { showError(`Error loading zones: ${error.message}`); }
         }
 
-        function getZoneFromClick(event) {
-            if (!zoneMeta || !zoneMeta.zones || !zoneMeta.overall_bounds) return null;
+        function _getZoneCanvasDrawPoint(event) {
             const canvas = document.getElementById('blockMapCanvas');
             const picker = document.getElementById('zonePicker');
             if (!canvas || !picker) return null;
@@ -2961,6 +3138,199 @@
             const drawX = (event.clientX - pickerRect.left - _zmBaseOffsetX - _zmPanX) / totalScale;
             const drawY = (event.clientY - pickerRect.top  - _zmBaseOffsetY - _zmPanY) / totalScale;
             if (drawX < 0 || drawY < 0 || drawX > canvas.width || drawY > canvas.height) return null;
+            return { drawX, drawY, canvas };
+        }
+
+        function _encodeClipPath(pathValue) {
+            return String(pathValue || '')
+                .split('/')
+                .map(part => encodeURIComponent(part))
+                .join('/');
+        }
+
+        function setZoneVideoStatus(text, isError = false) {
+            const status = document.getElementById('zoneVideoStatus');
+            if (!status) return;
+            status.textContent = text || '';
+            status.classList.toggle('error', Boolean(isError && text));
+        }
+
+        function destroyZoneVideoHlsInstance() {
+            if (!zoneVideoHlsInstance) return;
+            try { zoneVideoHlsInstance.destroy(); } catch (_) {}
+            zoneVideoHlsInstance = null;
+        }
+
+        function loadHlsLibrary() {
+            if (window.Hls) return Promise.resolve(window.Hls);
+            if (zoneVideoHlsLoaderPromise) return zoneVideoHlsLoaderPromise;
+            zoneVideoHlsLoaderPromise = new Promise((resolve, reject) => {
+                const script = document.createElement('script');
+                script.src = 'https://cdn.jsdelivr.net/npm/hls.js@latest';
+                script.async = true;
+                script.onload = () => resolve(window.Hls);
+                script.onerror = () => reject(new Error('Unable to load HLS player library.'));
+                document.head.appendChild(script);
+            });
+            return zoneVideoHlsLoaderPromise;
+        }
+
+        function getZoneVideoUrl(zone, dateId, clip) {
+            const encodedZone = encodeURIComponent(zone);
+            const encodedDate = encodeURIComponent(dateId);
+            if (clip?.kind === 'hls' && clip?.manifest_path) {
+                return `/api/zone/video/hls/${encodedZone}/${encodedDate}/${_encodeClipPath(clip.manifest_path)}`;
+            }
+            const clipName = clip?.clip_name;
+            if (!clipName) return null;
+            return `/api/zone/video/${encodedZone}/${encodedDate}/${_encodeClipPath(clipName)}`;
+        }
+
+        function getZoneVideoHitFromClick(event) {
+            if (!isZonePickerActive || selectedZone) return null;
+            if (!Array.isArray(zoneVideoIconHitboxes) || zoneVideoIconHitboxes.length === 0) return null;
+            const drawPoint = _getZoneCanvasDrawPoint(event);
+            if (!drawPoint) return null;
+            const { drawX, drawY } = drawPoint;
+            for (const hit of zoneVideoIconHitboxes) {
+                const dx = drawX - hit.x;
+                const dy = drawY - hit.y;
+                if ((dx * dx) + (dy * dy) <= (hit.r * hit.r)) return hit;
+            }
+            return null;
+        }
+
+        function closeZoneVideoModal() {
+            const modal = document.getElementById('zoneVideoModal');
+            const player = document.getElementById('zoneVideoPlayer');
+            const clipList = document.getElementById('zoneVideoClipList');
+            const empty = document.getElementById('zoneVideoEmpty');
+            if (!modal || !player || !clipList || !empty) return;
+            destroyZoneVideoHlsInstance();
+            player.pause();
+            player.removeAttribute('src');
+            player.load();
+            clipList.innerHTML = '';
+            empty.style.display = 'none';
+            setZoneVideoStatus('');
+            modal.classList.remove('open');
+            modal.setAttribute('aria-hidden', 'true');
+            activeZoneVideoContext = null;
+        }
+
+        async function playZoneVideoClip(zone, dateId, clips, clipIndex) {
+            const player = document.getElementById('zoneVideoPlayer');
+            const clipList = document.getElementById('zoneVideoClipList');
+            if (!player || !clipList || !Array.isArray(clips) || clips.length === 0) return;
+            const index = Math.max(0, Math.min(clipIndex, clips.length - 1));
+            const clip = clips[index];
+            const url = getZoneVideoUrl(zone, dateId, clip);
+            if (!url) return;
+            destroyZoneVideoHlsInstance();
+            player.pause();
+            player.removeAttribute('src');
+            player.load();
+            setZoneVideoStatus('Loading stream...');
+
+            try {
+                if (clip?.kind === 'hls') {
+                    const nativeHls = player.canPlayType('application/vnd.apple.mpegurl');
+                    if (nativeHls) {
+                        player.src = url;
+                        player.load();
+                    } else {
+                        const HlsLib = await loadHlsLibrary();
+                        if (!HlsLib || !HlsLib.isSupported()) {
+                            setZoneVideoStatus('HLS playback is not supported in this browser.', true);
+                            return;
+                        }
+                        zoneVideoHlsInstance = new HlsLib({
+                            enableWorker: true,
+                            lowLatencyMode: false,
+                            backBufferLength: 60,
+                        });
+                        zoneVideoHlsInstance.attachMedia(player);
+                        zoneVideoHlsInstance.on(HlsLib.Events.MEDIA_ATTACHED, () => {
+                            zoneVideoHlsInstance.loadSource(url);
+                        });
+                        zoneVideoHlsInstance.on(HlsLib.Events.ERROR, (_, data) => {
+                            if (data?.fatal) {
+                                setZoneVideoStatus(`Stream error: ${data.type || 'unknown'}`, true);
+                            }
+                        });
+                    }
+                } else {
+                    player.src = url;
+                    player.load();
+                }
+                player.play().catch(() => {});
+            } catch (error) {
+                setZoneVideoStatus(error?.message || 'Unable to start video playback.', true);
+            }
+
+            activeZoneVideoContext = { zone, dateId, clips, index };
+            const buttons = clipList.querySelectorAll('.zone-video-clip-btn');
+            buttons.forEach((button, btnIdx) => button.classList.toggle('active', btnIdx === index));
+        }
+
+        function openZoneVideoModal(zone, dateId, clips) {
+            const modal = document.getElementById('zoneVideoModal');
+            const title = document.getElementById('zoneVideoModalTitle');
+            const clipList = document.getElementById('zoneVideoClipList');
+            const empty = document.getElementById('zoneVideoEmpty');
+            if (!modal || !title || !clipList || !empty) return;
+            title.textContent = `Zone ${zone} · ${dateId || ''}`.trim();
+            clipList.innerHTML = '';
+            const list = Array.isArray(clips) ? clips : [];
+            if (list.length === 0) {
+                empty.style.display = '';
+                setZoneVideoStatus('');
+                modal.classList.add('open');
+                modal.setAttribute('aria-hidden', 'false');
+                return;
+            }
+            empty.style.display = 'none';
+            setZoneVideoStatus('');
+            list.forEach((clip, idx) => {
+                const btn = document.createElement('button');
+                btn.className = 'zone-video-clip-btn';
+                btn.textContent = clip.label || clip.manifest_path || clip.clip_name || `Clip ${idx + 1}`;
+                btn.addEventListener('click', () => playZoneVideoClip(zone, dateId, list, idx));
+                clipList.appendChild(btn);
+            });
+            modal.classList.add('open');
+            modal.setAttribute('aria-hidden', 'false');
+            playZoneVideoClip(zone, dateId, list, 0);
+        }
+
+        function initZoneVideoModal() {
+            const modal = document.getElementById('zoneVideoModal');
+            const closeBtn = document.getElementById('zoneVideoModalClose');
+            const player = document.getElementById('zoneVideoPlayer');
+            if (!modal || !closeBtn || !player) return;
+            closeBtn.addEventListener('click', closeZoneVideoModal);
+            modal.addEventListener('click', (event) => {
+                if (event.target === modal) closeZoneVideoModal();
+            });
+            player.addEventListener('playing', () => setZoneVideoStatus(''));
+            player.addEventListener('loadeddata', () => setZoneVideoStatus(''));
+            player.addEventListener('waiting', () => setZoneVideoStatus('Buffering...'));
+            player.addEventListener('stalled', () => setZoneVideoStatus('Network is slow. Rebuffering...', true));
+            player.addEventListener('error', () => {
+                const err = player.error;
+                const code = err?.code ? ` (code ${err.code})` : '';
+                setZoneVideoStatus(`Playback failed${code}`, true);
+            });
+            document.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && modal.classList.contains('open')) closeZoneVideoModal();
+            });
+        }
+
+        function getZoneFromClick(event) {
+            if (!zoneMeta || !zoneMeta.zones || !zoneMeta.overall_bounds) return null;
+            const drawPoint = _getZoneCanvasDrawPoint(event);
+            if (!drawPoint) return null;
+            const { drawX, drawY, canvas } = drawPoint;
 
             const relX = drawX / canvas.width;
             const relY = drawY / canvas.height;
@@ -3137,6 +3507,7 @@
 
         async function updateZoneMapForDate(dateId) {
             if (!dateId) return;
+            if (typeof closeZoneVideoModal === 'function') closeZoneVideoModal();
             latestZoneMapDateRequest = dateId;
             lastZonePickerDateId = dateId;
             const cacheKey = `${dateId}`;
@@ -4128,6 +4499,15 @@
 
                 // Let _zonePreviewLoadFull's direct selectZone call pass through
                 if (window._zonePreviewInProgress) return;
+
+                const videoHit = typeof getZoneVideoHitFromClick === 'function' ? getZoneVideoHitFromClick(e) : null;
+                if (videoHit) {
+                    e.stopImmediatePropagation();
+                    if (typeof openZoneVideoModal === 'function') {
+                        openZoneVideoModal(videoHit.zone, (typeof lastZonePickerDateId !== 'undefined' ? lastZonePickerDateId : null), videoHit.clips || []);
+                    }
+                    return;
+                }
 
                 const zone = typeof getZoneFromClick === 'function' ? getZoneFromClick(e) : null;
                 if (!zone) return;
