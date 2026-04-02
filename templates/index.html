@@ -3230,7 +3230,7 @@
             player.pause();
             player.removeAttribute('src');
             player.load();
-            setZoneVideoStatus('Loading stream...');
+            setZoneVideoStatus('Fetching video from server\u2026');
 
             try {
                 if (clip?.kind === 'hls') {
@@ -3260,6 +3260,33 @@
                         });
                     }
                 } else {
+                    // For progressive MP4 files served from Azure File Share, probe the URL
+                    // first with a HEAD request so we can detect transcode-pending state
+                    // without buffering the entire video into memory.
+                    try {
+                        const head = await fetch(url, { method: 'HEAD' });
+                        if (!head.ok) {
+                            setZoneVideoStatus(`Video not available (${head.status}).`, true);
+                            return;
+                        }
+                        if (head.headers.get('X-Transcode-Status') === 'pending') {
+                            // Server is converting this clip to H.264 in the background.
+                            // Play the original anyway (may work in some browsers) and
+                            // schedule a silent reload in 30 s to pick up the converted copy.
+                            setZoneVideoStatus('Converting for playback \u2014 video may load slowly the first time.');
+                            setTimeout(() => {
+                                const ctx = activeZoneVideoContext;
+                                if (ctx && ctx.zone === zone && ctx.dateId === dateId && ctx.index === index) {
+                                    playZoneVideoClip(zone, dateId, clips, index);
+                                }
+                            }, 30000);
+                        } else {
+                            setZoneVideoStatus('');
+                        }
+                    } catch (_) {
+                        // HEAD failed (CORS / network); continue anyway.
+                        setZoneVideoStatus('');
+                    }
                     player.src = url;
                     player.load();
                 }
