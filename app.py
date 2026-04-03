@@ -72,12 +72,15 @@ DISABLE_VIDEO_TRANSCODE = os.environ.get("DISABLE_VIDEO_TRANSCODE", "").strip() 
 # Video storage backend
 # - filesystem: existing local/File Share discovery + Flask serving
 # - blob: discover videos in Azure Blob and return SAS redirects for playback
+# - blob_mount: discover/serve videos from a BlobFuse-style mounted path
 VIDEO_STORAGE_BACKEND = os.environ.get("VIDEO_STORAGE_BACKEND", "filesystem").strip().lower()
 AZURE_BLOB_ACCOUNT = os.environ.get("AZURE_BLOB_ACCOUNT", "").strip()
 AZURE_BLOB_KEY = os.environ.get("AZURE_BLOB_KEY", "").strip()
 AZURE_BLOB_CONTAINER = os.environ.get("AZURE_BLOB_CONTAINER", "layout-data").strip()
 AZURE_BLOB_VIDEO_PREFIX = os.environ.get("AZURE_BLOB_VIDEO_PREFIX", "layout_data/{project}").strip()
 AZURE_BLOB_SAS_EXPIRY_MINUTES = int(os.environ.get("AZURE_BLOB_SAS_EXPIRY_MINUTES", "60"))
+AZURE_BLOB_MOUNT_ROOT = os.environ.get("AZURE_BLOB_MOUNT_ROOT", "").strip()
+AZURE_BLOB_MOUNT_VIDEO_PREFIX = os.environ.get("AZURE_BLOB_MOUNT_VIDEO_PREFIX", "layout_data/{project}").strip()
 
 # In-memory cache: abs_path -> (codec_name, codec_tag)
 # Codec never changes for a given file, so caching for the server lifetime is safe.
@@ -234,6 +237,10 @@ def is_blob_video_backend_enabled():
     return VIDEO_STORAGE_BACKEND == "blob"
 
 
+def is_blob_video_mount_backend_enabled():
+    return VIDEO_STORAGE_BACKEND == "blob_mount"
+
+
 def _blob_video_config_ready():
     return bool(AZURE_BLOB_ACCOUNT and AZURE_BLOB_KEY and AZURE_BLOB_CONTAINER)
 
@@ -275,6 +282,14 @@ def resolve_blob_video_prefix(project):
         return base
 
 
+def resolve_blob_mount_video_prefix(project):
+    base = (AZURE_BLOB_MOUNT_VIDEO_PREFIX or "layout_data/{project}").strip().strip("/")
+    try:
+        return base.format(project=project)
+    except Exception:
+        return base
+
+
 def normalize_blob_path(path_value):
     if not path_value or path_value.startswith(("/", "\\")):
         return None
@@ -286,13 +301,39 @@ def normalize_blob_path(path_value):
     return normalized
 
 
+def _path_matches_prefix(prefix, normalized_path):
+    if not normalized_path:
+        return False
+    check_prefix = str(prefix or "").strip("/")
+    if not check_prefix:
+        return False
+    return normalized_path == check_prefix or normalized_path.startswith(f"{check_prefix}/")
+
+
 def _blob_path_matches_project(project, normalized_blob_path):
     if not normalized_blob_path:
         return False
     prefix = resolve_blob_video_prefix(project).strip("/")
-    if not prefix:
+    return _path_matches_prefix(prefix, normalized_blob_path)
+
+
+def _blob_mount_path_matches_project(project, normalized_path):
+    if not normalized_path:
         return False
-    return normalized_blob_path == prefix or normalized_blob_path.startswith(f"{prefix}/")
+    prefix = resolve_blob_mount_video_prefix(project).strip("/")
+    return _path_matches_prefix(prefix, normalized_path)
+
+
+def _blob_mount_root_abs():
+    root = (AZURE_BLOB_MOUNT_ROOT or "").strip()
+    if not root:
+        return None
+    return os.path.abspath(root)
+
+
+def _blob_mount_ready():
+    root = _blob_mount_root_abs()
+    return bool(root and os.path.isdir(root))
 
 
 def build_blob_video_sas_url(blob_path):
@@ -1829,6 +1870,56 @@ def discover_zone_videos_blob(project, date_str):
     return by_zone
 
 
+def _resolve_blob_mount_path(rel_path):
+    mount_root = _blob_mount_root_abs()
+    if not mount_root:
+        return None, None
+    return _resolve_zone_video_path(mount_root, rel_path)
+
+
+def discover_zone_videos_blob_mount(project, date_str):
+    if not is_blob_video_mount_backend_enabled():
+        return {}
+    target_date, _ = split_sonrisa_date_time(date_str)
+    if not target_date:
+        return {}
+    mount_root = _blob_mount_root_abs()
+    if not mount_root:
+        return {}
+    project_prefix = resolve_blob_mount_video_prefix(project).strip("/")
+    if not project_prefix:
+        return {}
+    project_root_abs, _ = _resolve_zone_video_path(mount_root, project_prefix)
+    if not project_root_abs or not os.path.isdir(project_root_abs):
+        return {}
+    by_zone = {}
+    for root, _, files in os.walk(project_root_abs):
+        for filename in sorted(files):
+            _, ext = os.path.splitext(filename)
+            ext = ext.lower()
+            if ext not in ZONE_VIDEO_EXTENSIONS and ext not in HLS_MANIFEST_EXTENSIONS:
+                continue
+            full_path = os.path.join(root, filename)
+            rel_path = os.path.relpath(full_path, mount_root).replace(os.sep, "/")
+            if not _is_blob_video_candidate_path(rel_path):
+                continue
+            if not _video_rel_matches_date(rel_path, date_str):
+                continue
+            zones = _extract_zone_codes_from_text(rel_path)
+            if not zones:
+                continue
+            label = os.path.splitext(os.path.basename(rel_path))[0].replace("_", " ").strip()
+            if ext in HLS_MANIFEST_EXTENSIONS:
+                clip = {"kind": "hls", "manifest_path": rel_path, "label": label}
+            else:
+                clip = {"kind": "progressive", "clip_name": rel_path, "label": label}
+            for zone in zones:
+                by_zone.setdefault(zone, []).append(clip)
+    for zone, clips in by_zone.items():
+        clips.sort(key=lambda item: (0 if item.get("kind") == "hls" else 1, item.get("label") or ""))
+    return by_zone
+
+
 def discover_zone_videos(project_layout_dir, date_str):
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
@@ -3114,6 +3205,8 @@ def get_zones():
     if date_id:
         if is_blob_video_backend_enabled():
             zone_video_map = discover_zone_videos_blob(project, date_id)
+        elif is_blob_video_mount_backend_enabled():
+            zone_video_map = discover_zone_videos_blob_mount(project, date_id)
         else:
             zone_video_map = discover_zone_videos(project_layout_dir, date_id)
     else:
@@ -3567,6 +3660,39 @@ def get_zone_video(zone, date_str, clip_name):
         log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="302_blob_sas")
         return redirect(sas_url, code=302)
 
+    if is_blob_video_mount_backend_enabled():
+        if not _blob_mount_ready():
+            return jsonify({'error': 'Blob mount path is not configured or accessible'}), 500
+        normalized_rel = normalize_blob_path(clip_name)
+        if not normalized_rel:
+            return jsonify({'error': 'Invalid clip path'}), 400
+        _, ext = os.path.splitext(normalized_rel)
+        if ext.lower() not in ZONE_VIDEO_EXTENSIONS:
+            return jsonify({'error': 'Unsupported video format'}), 400
+        if not _blob_mount_path_matches_project(project, normalized_rel):
+            return jsonify({'error': 'Video clip outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_rel):
+            return jsonify({'error': 'Video clip outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_rel, date_str):
+            return jsonify({'error': 'Video clip does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_rel):
+            return jsonify({'error': 'Video clip does not match requested zone'}), 404
+        clip_path, _ = _resolve_blob_mount_path(normalized_rel)
+        if not clip_path or not os.path.exists(clip_path) or not os.path.isfile(clip_path):
+            return jsonify({'error': 'Video clip not found'}), 404
+
+        serve_path = get_or_create_browser_compatible_video(clip_path)
+        clip_sig = get_file_signature(serve_path)
+        etag = build_etag("zone-video-mount", project, zone, date_str, normalized_rel, clip_sig)
+        if request_etag_matches(etag):
+            log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="304")
+            return make_not_modified_response(etag)
+        mimetype, _ = mimetypes.guess_type(serve_path)
+        response = send_file(serve_path, mimetype=(mimetype or "video/mp4"), conditional=True)
+        apply_cache_headers(response, etag)
+        log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="blob_mount")
+        return response
+
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
@@ -3631,6 +3757,38 @@ def get_zone_video_hls_manifest(zone, date_str, manifest_path):
         response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
         apply_cache_headers(response, etag)
         log_timing("get_zone_video_hls_manifest", request_start, project=project, zone=zone, date=date_str, manifest=normalized_manifest, result="blob")
+        return response
+
+    if is_blob_video_mount_backend_enabled():
+        if not _blob_mount_ready():
+            return jsonify({'error': 'Blob mount path is not configured or accessible'}), 500
+        normalized_manifest = normalize_blob_path(manifest_path)
+        if not normalized_manifest:
+            return jsonify({'error': 'Invalid manifest path'}), 400
+        if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+            return jsonify({'error': 'Unsupported manifest format'}), 400
+        if not _blob_mount_path_matches_project(project, normalized_manifest):
+            return jsonify({'error': 'Manifest outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_manifest):
+            return jsonify({'error': 'Manifest outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_manifest, date_str):
+            return jsonify({'error': 'Manifest does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_manifest):
+            return jsonify({'error': 'Manifest does not match requested zone'}), 404
+        manifest_abs_path, _ = _resolve_blob_mount_path(normalized_manifest)
+        if not manifest_abs_path or not os.path.exists(manifest_abs_path) or not os.path.isfile(manifest_abs_path):
+            return jsonify({'error': 'Manifest not found'}), 404
+        manifest_sig = get_file_signature(manifest_abs_path)
+        etag = build_etag("zone-hls-manifest-mount", project, zone, date_str, normalized_manifest, manifest_sig)
+        if request_etag_matches(etag):
+            return make_not_modified_response(etag)
+        with open(manifest_abs_path, "r", encoding="utf-8", errors="ignore") as handle:
+            manifest_text = handle.read()
+        rewritten_manifest = _rewrite_hls_manifest(manifest_text, zone, date_str, normalized_manifest)
+        response = make_response(rewritten_manifest)
+        response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+        apply_cache_headers(response, etag)
+        log_timing("get_zone_video_hls_manifest", request_start, project=project, zone=zone, date=date_str, manifest=normalized_manifest, result="blob_mount")
         return response
 
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
@@ -3717,6 +3875,71 @@ def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path=None):
             return jsonify({'error': 'Blob video backend is not configured'}), 500
         log_timing("get_zone_video_hls_asset", request_start, project=project, zone=zone, date=date_str, asset=joined_asset_rel, result="302_blob_sas")
         return redirect(sas_url, code=302)
+
+    if is_blob_video_mount_backend_enabled():
+        if not _blob_mount_ready():
+            return jsonify({'error': 'Blob mount path is not configured or accessible'}), 500
+        normalized_manifest = normalize_blob_path(manifest_path)
+        if not normalized_manifest:
+            return jsonify({'error': 'Invalid manifest path'}), 400
+        if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+            return jsonify({'error': 'Unsupported manifest format'}), 400
+        if not _blob_mount_path_matches_project(project, normalized_manifest):
+            return jsonify({'error': 'Manifest outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_manifest):
+            return jsonify({'error': 'Manifest outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_manifest, date_str):
+            return jsonify({'error': 'Manifest does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_manifest):
+            return jsonify({'error': 'Manifest does not match requested zone'}), 404
+        manifest_abs_path, _ = _resolve_blob_mount_path(normalized_manifest)
+        if not manifest_abs_path or not os.path.exists(manifest_abs_path) or not os.path.isfile(manifest_abs_path):
+            return jsonify({'error': 'Manifest not found'}), 404
+
+        manifest_dir = os.path.dirname(normalized_manifest)
+        asset_input = normalize_blob_path(asset_path)
+        if not asset_input:
+            return jsonify({'error': 'Invalid asset path'}), 400
+        if manifest_dir and (asset_input == manifest_dir or asset_input.startswith(f"{manifest_dir}/")):
+            joined_asset_rel = asset_input
+        else:
+            joined_asset_rel = normalize_blob_path(os.path.join(manifest_dir, asset_input).replace("\\", "/"))
+        if not joined_asset_rel:
+            return jsonify({'error': 'Invalid asset path'}), 400
+        if manifest_dir and not joined_asset_rel.startswith(f"{manifest_dir}/") and joined_asset_rel != manifest_dir:
+            return jsonify({'error': 'Asset path outside manifest directory'}), 400
+        if not _blob_mount_path_matches_project(project, joined_asset_rel):
+            return jsonify({'error': 'Asset outside project scope'}), 403
+        if not _is_blob_video_candidate_path(joined_asset_rel):
+            return jsonify({'error': 'Asset outside videos path'}), 403
+        if not _video_rel_matches_date(joined_asset_rel, date_str):
+            return jsonify({'error': 'Asset does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, joined_asset_rel):
+            return jsonify({'error': 'Asset does not match requested zone'}), 404
+        asset_abs_path, normalized_asset = _resolve_blob_mount_path(joined_asset_rel)
+        if not asset_abs_path or not os.path.exists(asset_abs_path) or not os.path.isfile(asset_abs_path):
+            return jsonify({'error': 'Asset not found'}), 404
+        asset_ext = os.path.splitext(asset_abs_path)[1].lower()
+        if asset_ext not in HLS_ASSET_EXTENSIONS:
+            return jsonify({'error': 'Unsupported HLS asset format'}), 400
+
+        asset_sig = get_file_signature(asset_abs_path)
+        etag = build_etag("zone-hls-asset-mount", project, zone, date_str, normalized_manifest, normalized_asset, asset_sig)
+        if request_etag_matches(etag):
+            return make_not_modified_response(etag)
+        mime_map = {
+            ".m3u8": "application/vnd.apple.mpegurl",
+            ".ts": "video/mp2t",
+            ".m4s": "video/iso.segment",
+            ".aac": "audio/aac",
+            ".vtt": "text/vtt",
+            ".key": "application/octet-stream",
+        }
+        mimetype = mime_map.get(asset_ext) or mimetypes.guess_type(asset_abs_path)[0] or "application/octet-stream"
+        response = send_file(asset_abs_path, mimetype=mimetype, conditional=True)
+        apply_cache_headers(response, etag)
+        log_timing("get_zone_video_hls_asset", request_start, project=project, zone=zone, date=date_str, asset=normalized_asset, result="blob_mount")
+        return response
 
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
