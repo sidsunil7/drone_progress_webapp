@@ -15,7 +15,7 @@ import re
 import time
 import hashlib
 from urllib.parse import quote
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from functools import lru_cache
 
 app = Flask(__name__)
@@ -69,21 +69,22 @@ VIDEO_TRANSCODE_CACHE_DIR = os.environ.get(
 # the original file directly (useful when files are already H.264).
 DISABLE_VIDEO_TRANSCODE = os.environ.get("DISABLE_VIDEO_TRANSCODE", "").strip() in ("1", "true", "yes")
 
-# Azure File Share SAS redirect config.
-# When all three are set, video requests return a 302 redirect to a short-lived
-# SAS URL so the browser downloads directly from Azure Storage (bypasses Flask).
-AZURE_STORAGE_ACCOUNT = os.environ.get("AZURE_STORAGE_ACCOUNT", "").strip()
-AZURE_STORAGE_KEY      = os.environ.get("AZURE_STORAGE_KEY", "").strip()
-AZURE_FILE_SHARE_NAME  = os.environ.get("AZURE_FILE_SHARE_NAME", "").strip()
-# The local path where the Azure File Share is mounted on the server.
-# On Azure App Service the default mount is /home/ (maps to share root).
-AZURE_FILE_SHARE_MOUNT = os.environ.get("AZURE_FILE_SHARE_MOUNT", "/home/").rstrip("/") + "/"
-# SAS token validity in minutes (default 60).
-AZURE_SAS_EXPIRY_MINUTES = int(os.environ.get("AZURE_SAS_EXPIRY_MINUTES", "60"))
+# Video storage backend
+# - filesystem: existing local/File Share discovery + Flask serving
+# - blob: discover videos in Azure Blob and return SAS redirects for playback
+VIDEO_STORAGE_BACKEND = os.environ.get("VIDEO_STORAGE_BACKEND", "filesystem").strip().lower()
+AZURE_BLOB_ACCOUNT = os.environ.get("AZURE_BLOB_ACCOUNT", "").strip()
+AZURE_BLOB_KEY = os.environ.get("AZURE_BLOB_KEY", "").strip()
+AZURE_BLOB_CONTAINER = os.environ.get("AZURE_BLOB_CONTAINER", "layout-data").strip()
+AZURE_BLOB_VIDEO_PREFIX = os.environ.get("AZURE_BLOB_VIDEO_PREFIX", "layout_data/{project}").strip()
+AZURE_BLOB_SAS_EXPIRY_MINUTES = int(os.environ.get("AZURE_BLOB_SAS_EXPIRY_MINUTES", "60"))
 
 # In-memory cache: abs_path -> (codec_name, codec_tag)
 # Codec never changes for a given file, so caching for the server lifetime is safe.
 _probe_cache: dict = {}
+_blob_container_client = None
+_blob_sdk_checked = False
+_blob_sdk_available = False
 
 
 def log_timing(label, start_time, **context):
@@ -229,43 +230,113 @@ def get_or_create_browser_compatible_video(source_path):
     return source_path
 
 
-def build_azure_sas_video_url(abs_file_path):
-    """Return a short-lived Azure File Share SAS URL for abs_file_path, or None.
+def is_blob_video_backend_enabled():
+    return VIDEO_STORAGE_BACKEND == "blob"
 
-    Requires AZURE_STORAGE_ACCOUNT, AZURE_STORAGE_KEY, and AZURE_FILE_SHARE_NAME
-    to be set.  The file path is mapped to the share by stripping the local mount
-    prefix (AZURE_FILE_SHARE_MOUNT).
 
-    Example mapping:
-      AZURE_FILE_SHARE_MOUNT = /home/
-      abs_file_path = /home/site/wwwroot/layout_data/Sonrisa/Flight_.../video.mp4
-      → share-relative path = site/wwwroot/layout_data/Sonrisa/Flight_.../video.mp4
-    """
-    if not (AZURE_STORAGE_ACCOUNT and AZURE_STORAGE_KEY and AZURE_FILE_SHARE_NAME):
-        return None
-    norm = os.path.abspath(abs_file_path)
-    if not norm.startswith(AZURE_FILE_SHARE_MOUNT):
-        return None
-    rel = norm[len(AZURE_FILE_SHARE_MOUNT):]   # strip mount prefix → share-relative
-    # Split into directory path and file name as required by generate_file_sas.
-    parts = rel.replace("\\", "/").split("/")
-    file_name = parts[-1]
-    dir_path  = "/".join(parts[:-1]) if len(parts) > 1 else ""
+def _blob_video_config_ready():
+    return bool(AZURE_BLOB_ACCOUNT and AZURE_BLOB_KEY and AZURE_BLOB_CONTAINER)
+
+
+def _ensure_blob_sdk_loaded():
+    global _blob_sdk_checked, _blob_sdk_available
+    if _blob_sdk_checked:
+        return _blob_sdk_available
     try:
-        from azure.storage.fileshare import generate_file_sas, FileSasPermissions
-        from datetime import timedelta
-        sas = generate_file_sas(
-            account_name=AZURE_STORAGE_ACCOUNT,
-            share_name=AZURE_FILE_SHARE_NAME,
-            file_path=[dir_path, file_name] if dir_path else [file_name],
-            account_key=AZURE_STORAGE_KEY,
-            permission=FileSasPermissions(read=True),
-            expiry=datetime.now(timezone.utc) + timedelta(minutes=AZURE_SAS_EXPIRY_MINUTES),
+        from azure.storage.blob import BlobServiceClient, generate_blob_sas, BlobSasPermissions  # noqa: F401
+        _blob_sdk_available = True
+    except Exception:
+        _blob_sdk_available = False
+    _blob_sdk_checked = True
+    return _blob_sdk_available
+
+
+def _get_blob_container_client():
+    global _blob_container_client
+    if _blob_container_client is not None:
+        return _blob_container_client
+    if not (_blob_video_config_ready() and _ensure_blob_sdk_loaded()):
+        return None
+    try:
+        from azure.storage.blob import BlobServiceClient
+        account_url = f"https://{AZURE_BLOB_ACCOUNT}.blob.core.windows.net"
+        service = BlobServiceClient(account_url=account_url, credential=AZURE_BLOB_KEY)
+        _blob_container_client = service.get_container_client(AZURE_BLOB_CONTAINER)
+    except Exception:
+        _blob_container_client = None
+    return _blob_container_client
+
+
+def resolve_blob_video_prefix(project):
+    base = (AZURE_BLOB_VIDEO_PREFIX or "layout_data/{project}").strip().strip("/")
+    try:
+        return base.format(project=project)
+    except Exception:
+        return base
+
+
+def normalize_blob_path(path_value):
+    if not path_value or path_value.startswith(("/", "\\")):
+        return None
+    normalized = os.path.normpath(path_value).replace("\\", "/")
+    if normalized in (".", ""):
+        return None
+    if normalized.startswith("../") or normalized == "..":
+        return None
+    return normalized
+
+
+def _blob_path_matches_project(project, normalized_blob_path):
+    if not normalized_blob_path:
+        return False
+    prefix = resolve_blob_video_prefix(project).strip("/")
+    if not prefix:
+        return False
+    return normalized_blob_path == prefix or normalized_blob_path.startswith(f"{prefix}/")
+
+
+def build_blob_video_sas_url(blob_path):
+    normalized_blob_path = normalize_blob_path(blob_path)
+    if not normalized_blob_path:
+        return None
+    if not (_blob_video_config_ready() and _ensure_blob_sdk_loaded()):
+        return None
+    try:
+        from azure.storage.blob import generate_blob_sas, BlobSasPermissions
+        sas = generate_blob_sas(
+            account_name=AZURE_BLOB_ACCOUNT,
+            container_name=AZURE_BLOB_CONTAINER,
+            blob_name=normalized_blob_path,
+            account_key=AZURE_BLOB_KEY,
+            permission=BlobSasPermissions(read=True),
+            expiry=datetime.now(timezone.utc) + timedelta(minutes=AZURE_BLOB_SAS_EXPIRY_MINUTES),
         )
-        return (
-            f"https://{AZURE_STORAGE_ACCOUNT}.file.core.windows.net"
-            f"/{AZURE_FILE_SHARE_NAME}/{rel}?{sas}"
-        )
+        encoded_blob = quote(normalized_blob_path, safe="/")
+        return f"https://{AZURE_BLOB_ACCOUNT}.blob.core.windows.net/{AZURE_BLOB_CONTAINER}/{encoded_blob}?{sas}"
+    except Exception:
+        return None
+
+
+def blob_exists(blob_path):
+    client = _get_blob_container_client()
+    normalized_blob_path = normalize_blob_path(blob_path)
+    if client is None or not normalized_blob_path:
+        return False
+    try:
+        return client.get_blob_client(normalized_blob_path).exists()
+    except Exception:
+        return False
+
+
+def read_blob_text(blob_path):
+    client = _get_blob_container_client()
+    normalized_blob_path = normalize_blob_path(blob_path)
+    if client is None or not normalized_blob_path:
+        return None
+    try:
+        blob_client = client.get_blob_client(normalized_blob_path)
+        data = blob_client.download_blob().readall()
+        return data.decode("utf-8", errors="ignore")
     except Exception:
         return None
 
@@ -1694,11 +1765,68 @@ def _video_rel_matches_date(rel_path, date_str):
     target_date, _ = split_sonrisa_date_time(date_str)
     if not target_date:
         return False
-    first_part = str(rel_path or "").split("/", 1)[0]
-    if not first_part:
+    normalized = str(rel_path or "").replace("\\", "/")
+    if not normalized:
         return False
-    _, folder_date, _ = parse_sonrisa_folder_info(first_part.strip())
-    return folder_date == target_date
+    for part in normalized.split("/"):
+        if not part:
+            continue
+        _, folder_date, _ = parse_sonrisa_folder_info(part.strip())
+        if folder_date == target_date:
+            return True
+    return False
+
+
+def _is_blob_video_candidate_path(blob_name):
+    normalized = str(blob_name or "").replace("\\", "/").strip("/")
+    if not normalized:
+        return False
+    # Blob hierarchy stores videos under .../videos/ for this project.
+    return "/videos/" in normalized.lower()
+
+
+def discover_zone_videos_blob(project, date_str):
+    if not is_blob_video_backend_enabled():
+        return {}
+    target_date, _ = split_sonrisa_date_time(date_str)
+    if not target_date:
+        return {}
+    container_client = _get_blob_container_client()
+    if container_client is None:
+        return {}
+    prefix = resolve_blob_video_prefix(project).strip("/")
+    if not prefix:
+        return {}
+    by_zone = {}
+    list_prefix = f"{prefix}/"
+    try:
+        for blob in container_client.list_blobs(name_starts_with=list_prefix):
+            blob_name = normalize_blob_path(getattr(blob, "name", ""))
+            if not blob_name:
+                continue
+            if not _is_blob_video_candidate_path(blob_name):
+                continue
+            if not _video_rel_matches_date(blob_name, date_str):
+                continue
+            _, ext = os.path.splitext(blob_name)
+            ext = ext.lower()
+            if ext not in ZONE_VIDEO_EXTENSIONS and ext not in HLS_MANIFEST_EXTENSIONS:
+                continue
+            zones = _extract_zone_codes_from_text(blob_name)
+            if not zones:
+                continue
+            label = os.path.splitext(os.path.basename(blob_name))[0].replace("_", " ").strip()
+            if ext in HLS_MANIFEST_EXTENSIONS:
+                clip = {"kind": "hls", "manifest_path": blob_name, "label": label}
+            else:
+                clip = {"kind": "progressive", "clip_name": blob_name, "label": label}
+            for zone in zones:
+                by_zone.setdefault(zone, []).append(clip)
+    except Exception:
+        return {}
+    for zone, clips in by_zone.items():
+        clips.sort(key=lambda item: (0 if item.get("kind") == "hls" else 1, item.get("label") or ""))
+    return by_zone
 
 
 def discover_zone_videos(project_layout_dir, date_str):
@@ -1751,8 +1879,10 @@ def _rewrite_hls_manifest(manifest_text, zone, date_str, manifest_rel_path):
         joined = os.path.normpath(os.path.join(base_dir, ref)).replace("\\", "/")
         if joined.startswith("../") or joined == "..":
             return ref
-        encoded_asset = _encode_rel_path_for_url(joined)
-        return f"/api/zone/video/hls_asset/{encoded_zone}/{encoded_date}/{encoded_manifest}/{encoded_asset}"
+        # Use query parameter for asset path to avoid ambiguity with multiple
+        # path converters in Flask routes.
+        encoded_asset = quote(ref, safe="")
+        return f"/api/zone/video/hls_asset/{encoded_zone}/{encoded_date}/{encoded_manifest}?asset={encoded_asset}"
 
     rewritten_lines = []
     for line in manifest_text.splitlines():
@@ -2981,7 +3111,13 @@ def get_zones():
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
-    zone_video_map = discover_zone_videos(project_layout_dir, date_id) if date_id else {}
+    if date_id:
+        if is_blob_video_backend_enabled():
+            zone_video_map = discover_zone_videos_blob(project, date_id)
+        else:
+            zone_video_map = discover_zone_videos(project_layout_dir, date_id)
+    else:
+        zone_video_map = {}
     serialize_start = time.perf_counter()
     response = jsonify({
         'zones': [
@@ -3405,11 +3541,35 @@ def get_zone_video(zone, date_str, clip_name):
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
+    if not clip_name:
+        return jsonify({'error': 'Invalid clip path'}), 400
+
+    if is_blob_video_backend_enabled():
+        normalized_rel = normalize_blob_path(clip_name)
+        if not normalized_rel:
+            return jsonify({'error': 'Invalid clip path'}), 400
+        _, ext = os.path.splitext(normalized_rel)
+        if ext.lower() not in ZONE_VIDEO_EXTENSIONS:
+            return jsonify({'error': 'Unsupported video format'}), 400
+        if not _blob_path_matches_project(project, normalized_rel):
+            return jsonify({'error': 'Video clip outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_rel):
+            return jsonify({'error': 'Video clip outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_rel, date_str):
+            return jsonify({'error': 'Video clip does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_rel):
+            return jsonify({'error': 'Video clip does not match requested zone'}), 404
+        if not blob_exists(normalized_rel):
+            return jsonify({'error': 'Video clip not found'}), 404
+        sas_url = build_blob_video_sas_url(normalized_rel)
+        if not sas_url:
+            return jsonify({'error': 'Blob video backend is not configured'}), 500
+        log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="302_blob_sas")
+        return redirect(sas_url, code=302)
+
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
-    if not clip_name:
-        return jsonify({'error': 'Invalid clip path'}), 400
     clip_path, normalized_rel = _resolve_zone_video_path(project_layout_dir, clip_name)
     if not clip_path:
         return jsonify({'error': 'Invalid clip path'}), 400
@@ -3422,15 +3582,6 @@ def get_zone_video(zone, date_str, clip_name):
         return jsonify({'error': 'Video clip does not match requested date'}), 404
     if not _zone_matches_video_path(zone, normalized_rel):
         return jsonify({'error': 'Video clip does not match requested zone'}), 404
-
-    # If Azure credentials are configured, redirect the browser directly to a
-    # short-lived SAS URL on Azure File Share.  This bypasses Flask entirely:
-    # the browser streams the video straight from Azure Storage without proxying
-    # every byte through the App Service, which removes the main bottleneck.
-    sas_url = build_azure_sas_video_url(clip_path)
-    if sas_url:
-        log_timing("get_zone_video", request_start, project=project, zone=zone, date=date_str, clip=normalized_rel, result="302_sas")
-        return redirect(sas_url, code=302)
 
     serve_path = get_or_create_browser_compatible_video(clip_path)
     clip_sig = get_file_signature(serve_path)
@@ -3455,6 +3606,33 @@ def get_zone_video_hls_manifest(zone, date_str, manifest_path):
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
+    if is_blob_video_backend_enabled():
+        normalized_manifest = normalize_blob_path(manifest_path)
+        if not normalized_manifest:
+            return jsonify({'error': 'Invalid manifest path'}), 400
+        if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+            return jsonify({'error': 'Unsupported manifest format'}), 400
+        if not _blob_path_matches_project(project, normalized_manifest):
+            return jsonify({'error': 'Manifest outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_manifest):
+            return jsonify({'error': 'Manifest outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_manifest, date_str):
+            return jsonify({'error': 'Manifest does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_manifest):
+            return jsonify({'error': 'Manifest does not match requested zone'}), 404
+        manifest_text = read_blob_text(normalized_manifest)
+        if manifest_text is None:
+            return jsonify({'error': 'Manifest not found'}), 404
+        etag = build_etag("zone-hls-manifest-blob", project, zone, date_str, normalized_manifest, len(manifest_text))
+        if request_etag_matches(etag):
+            return make_not_modified_response(etag)
+        rewritten_manifest = _rewrite_hls_manifest(manifest_text, zone, date_str, normalized_manifest)
+        response = make_response(rewritten_manifest)
+        response.headers["Content-Type"] = "application/vnd.apple.mpegurl"
+        apply_cache_headers(response, etag)
+        log_timing("get_zone_video_hls_manifest", request_start, project=project, zone=zone, date=date_str, manifest=normalized_manifest, result="blob")
+        return response
+
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
@@ -3485,15 +3663,61 @@ def get_zone_video_hls_manifest(zone, date_str, manifest_path):
     return response
 
 
-@app.route('/api/zone/video/hls_asset/<zone>/<date_str>/<path:manifest_path>/<path:asset_path>')
-@app.route('/api/sonrisa/video/hls_asset/<zone>/<date_str>/<path:manifest_path>/<path:asset_path>')
-def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path):
+@app.route('/api/zone/video/hls_asset/<zone>/<date_str>/<path:manifest_path>')
+@app.route('/api/sonrisa/video/hls_asset/<zone>/<date_str>/<path:manifest_path>')
+def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path=None):
     request_start = time.perf_counter()
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
     zone = normalize_zone_code(zone)
     if not zone:
         return jsonify({'error': 'Invalid zone'}), 400
+    if asset_path is None:
+        asset_path = request.args.get("asset")
+    if not asset_path:
+        return jsonify({'error': 'Invalid asset path'}), 400
+    if is_blob_video_backend_enabled():
+        normalized_manifest = normalize_blob_path(manifest_path)
+        if not normalized_manifest:
+            return jsonify({'error': 'Invalid manifest path'}), 400
+        if os.path.splitext(normalized_manifest)[1].lower() not in HLS_MANIFEST_EXTENSIONS:
+            return jsonify({'error': 'Unsupported manifest format'}), 400
+        if not _blob_path_matches_project(project, normalized_manifest):
+            return jsonify({'error': 'Manifest outside project scope'}), 403
+        if not _is_blob_video_candidate_path(normalized_manifest):
+            return jsonify({'error': 'Manifest outside videos path'}), 403
+        if not _video_rel_matches_date(normalized_manifest, date_str):
+            return jsonify({'error': 'Manifest does not match requested date'}), 404
+        if not _zone_matches_video_path(zone, normalized_manifest):
+            return jsonify({'error': 'Manifest does not match requested zone'}), 404
+
+        manifest_dir = os.path.dirname(normalized_manifest)
+        asset_input = normalize_blob_path(asset_path)
+        if not asset_input:
+            return jsonify({'error': 'Invalid asset path'}), 400
+        if manifest_dir and (asset_input == manifest_dir or asset_input.startswith(f"{manifest_dir}/")):
+            joined_asset_rel = asset_input
+        else:
+            joined_asset_rel = normalize_blob_path(os.path.join(manifest_dir, asset_input).replace("\\", "/"))
+        if not joined_asset_rel:
+            return jsonify({'error': 'Invalid asset path'}), 400
+        if manifest_dir and not joined_asset_rel.startswith(f"{manifest_dir}/") and joined_asset_rel != manifest_dir:
+            return jsonify({'error': 'Asset path outside manifest directory'}), 400
+        asset_ext = os.path.splitext(joined_asset_rel)[1].lower()
+        if asset_ext not in HLS_ASSET_EXTENSIONS:
+            return jsonify({'error': 'Unsupported HLS asset format'}), 400
+        if not _blob_path_matches_project(project, joined_asset_rel):
+            return jsonify({'error': 'Asset outside project scope'}), 403
+        if not _is_blob_video_candidate_path(joined_asset_rel):
+            return jsonify({'error': 'Asset outside videos path'}), 403
+        if not blob_exists(joined_asset_rel):
+            return jsonify({'error': 'Asset not found'}), 404
+        sas_url = build_blob_video_sas_url(joined_asset_rel)
+        if not sas_url:
+            return jsonify({'error': 'Blob video backend is not configured'}), 500
+        log_timing("get_zone_video_hls_asset", request_start, project=project, zone=zone, date=date_str, asset=joined_asset_rel, result="302_blob_sas")
+        return redirect(sas_url, code=302)
+
     video_roots = resolve_zone_video_roots(project_layout_dir, date_str)
     if not video_roots:
         return jsonify({'error': 'No zone videos for this date'}), 404
@@ -3509,7 +3733,13 @@ def get_zone_video_hls_asset(zone, date_str, manifest_path, asset_path):
         return jsonify({'error': 'Manifest does not match requested zone'}), 404
 
     manifest_dir = os.path.dirname(normalized_manifest)
-    joined_asset_rel = os.path.normpath(os.path.join(manifest_dir, asset_path)).replace("\\", "/")
+    asset_input = normalize_blob_path(asset_path)
+    if not asset_input:
+        return jsonify({'error': 'Invalid asset path'}), 400
+    if manifest_dir and (asset_input == manifest_dir or asset_input.startswith(f"{manifest_dir}/")):
+        joined_asset_rel = asset_input
+    else:
+        joined_asset_rel = os.path.normpath(os.path.join(manifest_dir, asset_input)).replace("\\", "/")
     if joined_asset_rel.startswith("../") or joined_asset_rel == "..":
         return jsonify({'error': 'Invalid asset path'}), 400
     if manifest_dir and not joined_asset_rel.startswith(f"{manifest_dir}/") and joined_asset_rel != manifest_dir:
