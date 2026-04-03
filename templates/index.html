@@ -3155,8 +3155,27 @@
             status.classList.toggle('error', Boolean(isError && text));
         }
 
+        const zoneVideoDebugEnabled = (() => {
+            try {
+                const fromStorage = localStorage.getItem('zoneVideoDebug');
+                if (fromStorage === null) return true;
+                return ['1', 'true', 'yes', 'on'].includes(String(fromStorage).toLowerCase());
+            } catch (_) {
+                return true;
+            }
+        })();
+
+        function zoneVideoDebugLog(eventName, details = {}) {
+            if (!zoneVideoDebugEnabled) return;
+            try {
+                const ts = new Date().toISOString();
+                console.log(`[ZoneVideo][${ts}] ${eventName}`, details);
+            } catch (_) {}
+        }
+
         function destroyZoneVideoHlsInstance() {
             if (!zoneVideoHlsInstance) return;
+            zoneVideoDebugLog('hls:destroy');
             try { zoneVideoHlsInstance.destroy(); } catch (_) {}
             zoneVideoHlsInstance = null;
         }
@@ -3179,11 +3198,15 @@
             const encodedZone = encodeURIComponent(zone);
             const encodedDate = encodeURIComponent(dateId);
             if (clip?.kind === 'hls' && clip?.manifest_path) {
-                return `/api/zone/video/hls/${encodedZone}/${encodedDate}/${_encodeClipPath(clip.manifest_path)}`;
+                const url = `/api/zone/video/hls/${encodedZone}/${encodedDate}/${_encodeClipPath(clip.manifest_path)}`;
+                zoneVideoDebugLog('url:resolved', { kind: 'hls', zone, dateId, manifest_path: clip.manifest_path, url });
+                return url;
             }
             const clipName = clip?.clip_name;
             if (!clipName) return null;
-            return `/api/zone/video/${encodedZone}/${encodedDate}/${_encodeClipPath(clipName)}`;
+            const url = `/api/zone/video/${encodedZone}/${encodedDate}/${_encodeClipPath(clipName)}`;
+            zoneVideoDebugLog('url:resolved', { kind: 'progressive', zone, dateId, clip_name: clipName, url });
+            return url;
         }
 
         function getZoneVideoHitFromClick(event) {
@@ -3206,6 +3229,10 @@
             const clipList = document.getElementById('zoneVideoClipList');
             const empty = document.getElementById('zoneVideoEmpty');
             if (!modal || !player || !clipList || !empty) return;
+            zoneVideoDebugLog('modal:close', {
+                currentSrc: player.currentSrc || player.src || '',
+                currentTime: player.currentTime || 0,
+            });
             destroyZoneVideoHlsInstance();
             player.pause();
             player.removeAttribute('src');
@@ -3226,6 +3253,15 @@
             const clip = clips[index];
             const url = getZoneVideoUrl(zone, dateId, clip);
             if (!url) return;
+            zoneVideoDebugLog('play:start', {
+                zone,
+                dateId,
+                index,
+                clipKind: clip?.kind,
+                clipLabel: clip?.label,
+                clipName: clip?.clip_name || clip?.manifest_path || null,
+                url,
+            });
             destroyZoneVideoHlsInstance();
             player.pause();
             player.removeAttribute('src');
@@ -3235,12 +3271,15 @@
             try {
                 if (clip?.kind === 'hls') {
                     const nativeHls = player.canPlayType('application/vnd.apple.mpegurl');
+                    zoneVideoDebugLog('hls:capability', { nativeHls: Boolean(nativeHls), hasWindowHls: Boolean(window.Hls) });
                     if (nativeHls) {
                         player.src = url;
                         player.load();
+                        zoneVideoDebugLog('hls:native-load', { url });
                     } else {
                         const HlsLib = await loadHlsLibrary();
                         if (!HlsLib || !HlsLib.isSupported()) {
+                            zoneVideoDebugLog('hls:not-supported', { hasLib: Boolean(HlsLib) });
                             setZoneVideoStatus('HLS playback is not supported in this browser.', true);
                             return;
                         }
@@ -3251,9 +3290,23 @@
                         });
                         zoneVideoHlsInstance.attachMedia(player);
                         zoneVideoHlsInstance.on(HlsLib.Events.MEDIA_ATTACHED, () => {
+                            zoneVideoDebugLog('hls:media-attached', { url });
                             zoneVideoHlsInstance.loadSource(url);
                         });
+                        zoneVideoHlsInstance.on(HlsLib.Events.MANIFEST_PARSED, (_, data) => {
+                            zoneVideoDebugLog('hls:manifest-parsed', {
+                                levels: data?.levels?.length || 0,
+                                audioTracks: data?.audioTracks?.length || 0,
+                            });
+                        });
                         zoneVideoHlsInstance.on(HlsLib.Events.ERROR, (_, data) => {
+                            zoneVideoDebugLog('hls:error', {
+                                type: data?.type,
+                                details: data?.details,
+                                fatal: data?.fatal,
+                                responseCode: data?.response?.code,
+                                networkStatus: data?.networkDetails?.status || null,
+                            });
                             if (data?.fatal) {
                                 setZoneVideoStatus(`Stream error: ${data.type || 'unknown'}`, true);
                             }
@@ -3262,9 +3315,22 @@
                 } else {
                     player.src = url;
                     player.load();
+                    zoneVideoDebugLog('progressive:load', { url });
                 }
-                player.play().catch(() => {});
+                player.play().then(() => {
+                    zoneVideoDebugLog('player:play-started', {
+                        currentSrc: player.currentSrc || player.src || '',
+                        readyState: player.readyState,
+                        networkState: player.networkState,
+                    });
+                }).catch((error) => {
+                    zoneVideoDebugLog('player:play-rejected', {
+                        name: error?.name || null,
+                        message: error?.message || 'unknown',
+                    });
+                });
             } catch (error) {
+                zoneVideoDebugLog('play:exception', { message: error?.message || 'unknown' });
                 setZoneVideoStatus(error?.message || 'Unable to start video playback.', true);
             }
 
@@ -3282,11 +3348,18 @@
             title.textContent = `Zone ${zone} · ${dateId || ''}`.trim();
             clipList.innerHTML = '';
             const list = Array.isArray(clips) ? clips : [];
+            zoneVideoDebugLog('modal:open', {
+                zone,
+                dateId,
+                clipCount: list.length,
+                clipKinds: list.map(c => c?.kind || 'unknown'),
+            });
             if (list.length === 0) {
                 empty.style.display = '';
                 setZoneVideoStatus('');
                 modal.classList.add('open');
                 modal.setAttribute('aria-hidden', 'false');
+                zoneVideoDebugLog('modal:no-clips', { zone, dateId });
                 return;
             }
             empty.style.display = 'none';
@@ -3295,7 +3368,16 @@
                 const btn = document.createElement('button');
                 btn.className = 'zone-video-clip-btn';
                 btn.textContent = clip.label || clip.manifest_path || clip.clip_name || `Clip ${idx + 1}`;
-                btn.addEventListener('click', () => playZoneVideoClip(zone, dateId, list, idx));
+                btn.addEventListener('click', () => {
+                    zoneVideoDebugLog('clip:select', {
+                        zone,
+                        dateId,
+                        index: idx,
+                        label: clip.label || null,
+                        kind: clip.kind || null,
+                    });
+                    playZoneVideoClip(zone, dateId, list, idx);
+                });
                 clipList.appendChild(btn);
             });
             modal.classList.add('open');
@@ -3308,17 +3390,52 @@
             const closeBtn = document.getElementById('zoneVideoModalClose');
             const player = document.getElementById('zoneVideoPlayer');
             if (!modal || !closeBtn || !player) return;
+            zoneVideoDebugLog('init', { enabled: zoneVideoDebugEnabled });
             closeBtn.addEventListener('click', closeZoneVideoModal);
             modal.addEventListener('click', (event) => {
                 if (event.target === modal) closeZoneVideoModal();
             });
-            player.addEventListener('playing', () => setZoneVideoStatus(''));
-            player.addEventListener('loadeddata', () => setZoneVideoStatus(''));
-            player.addEventListener('waiting', () => setZoneVideoStatus('Buffering...'));
-            player.addEventListener('stalled', () => setZoneVideoStatus('Network is slow. Rebuffering...', true));
+            player.addEventListener('playing', () => {
+                zoneVideoDebugLog('player:event:playing', {
+                    currentTime: player.currentTime || 0,
+                    readyState: player.readyState,
+                    networkState: player.networkState,
+                });
+                setZoneVideoStatus('');
+            });
+            player.addEventListener('loadeddata', () => {
+                zoneVideoDebugLog('player:event:loadeddata', {
+                    currentSrc: player.currentSrc || player.src || '',
+                    duration: Number.isFinite(player.duration) ? player.duration : null,
+                    readyState: player.readyState,
+                });
+                setZoneVideoStatus('');
+            });
+            player.addEventListener('waiting', () => {
+                zoneVideoDebugLog('player:event:waiting', {
+                    currentTime: player.currentTime || 0,
+                    buffered: player.buffered?.length ? player.buffered.end(player.buffered.length - 1) : null,
+                });
+                setZoneVideoStatus('Buffering...');
+            });
+            player.addEventListener('stalled', () => {
+                zoneVideoDebugLog('player:event:stalled', {
+                    currentTime: player.currentTime || 0,
+                    networkState: player.networkState,
+                    readyState: player.readyState,
+                });
+                setZoneVideoStatus('Network is slow. Rebuffering...', true);
+            });
             player.addEventListener('error', () => {
                 const err = player.error;
                 const code = err?.code ? ` (code ${err.code})` : '';
+                zoneVideoDebugLog('player:event:error', {
+                    errorCode: err?.code || null,
+                    errorMessage: err?.message || null,
+                    currentSrc: player.currentSrc || player.src || '',
+                    networkState: player.networkState,
+                    readyState: player.readyState,
+                });
                 setZoneVideoStatus(`Playback failed${code}`, true);
             });
             document.addEventListener('keydown', (event) => {
