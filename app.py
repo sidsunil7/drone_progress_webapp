@@ -2761,9 +2761,11 @@ def get_date_summary(date_str):
         zone = normalize_zone_code(request.args.get('zone'))
         if not zone:
             return jsonify({'error': 'Zone required for this project'}), 400
-        date_folder_path = find_sonrisa_date_folder(project_layout_dir, zone, date_str)
-        if not date_folder_path:
+        dir_sig = _get_dir_signature(project_layout_dir)
+        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_str, dir_sig)
+        if not best:
             return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
+        date_folder_path = best[1]
         csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
         status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
         csv_sig = optional_file_signature(csv_path)

@@ -1057,7 +1057,7 @@
         .zone-video-modal.open { display: flex; }
         .zone-video-dialog {
             width: min(960px, 96vw);
-            max-height: min(92vh, 800px);
+            height: min(92vh, 800px);
             display: flex;
             flex-direction: column;
             background: #fff;
@@ -1092,14 +1092,18 @@
             padding: 12px;
             display: grid;
             grid-template-columns: 1fr;
+            grid-template-rows: auto minmax(0, 1fr) auto auto;
             gap: 10px;
-            overflow: auto;
+            height: 100%;
+            overflow: hidden;
         }
         .zone-video-player {
             width: 100%;
-            max-height: 70vh;
+            height: 100%;
+            min-height: 0;
             background: #000;
             border-radius: 8px;
+            object-fit: contain;
         }
         .zone-video-clip-list {
             display: flex;
@@ -1132,6 +1136,104 @@
         }
         .zone-video-status.error {
             color: #b91c1c;
+        }
+        .zone-video-metrics {
+            border: 1px solid #d6e3f1;
+            border-radius: 12px;
+            background: linear-gradient(180deg, #fbfdff 0%, #f5f9ff 100%);
+            box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+            padding: 10px 12px;
+        }
+        .zone-video-metrics-title {
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.01em;
+            color: #1e293b;
+            margin-bottom: 8px;
+        }
+        .zone-video-metrics-content {
+            width: 100%;
+        }
+        .zone-video-metrics-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            background: #fff;
+            border: 1px solid #dbe5f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        .zone-video-metrics-table td {
+            font-size: 12px;
+            padding: 7px 10px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .zone-video-metrics-table tr:nth-child(even) td {
+            background: #f8fafc;
+        }
+        .zone-video-metrics-table tr:last-child td {
+            border-bottom: 0;
+        }
+        .zone-video-metrics-table td:first-child {
+            color: #475569;
+            width: 56%;
+        }
+        .zone-video-metrics-table td:last-child {
+            color: #0f172a;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+            text-align: right;
+        }
+        .zone-video-metric-good {
+            color: #166534 !important;
+        }
+        .zone-video-metric-bad {
+            color: #b91c1c !important;
+        }
+        .zone-video-metrics-fallback {
+            font-size: 12px;
+            color: #64748b;
+            background: #f8fafc;
+            border: 1px dashed #cbd5e1;
+            border-radius: 8px;
+            padding: 8px 10px;
+        }
+        .settings-benchmark-card {
+            margin-bottom: 10px;
+            padding: 8px;
+            background: #f9f9f9;
+            border-radius: 6px;
+            border: 1px solid var(--bdr);
+        }
+        .settings-benchmark-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: #fff;
+            border: 1px solid #dbe5f0;
+            border-radius: 6px;
+            overflow: hidden;
+            margin-top: 6px;
+        }
+        .settings-benchmark-table th,
+        .settings-benchmark-table td {
+            padding: 6px 8px;
+            font-size: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        .settings-benchmark-table th {
+            text-align: left;
+            background: #f8fafc;
+            color: #334155;
+            font-weight: 700;
+        }
+        .settings-benchmark-table td:last-child {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-weight: 600;
+            color: #0f172a;
+        }
+        .settings-benchmark-table tr:last-child td {
+            border-bottom: 0;
         }
     </style>
 </head>
@@ -1300,9 +1402,13 @@
                 <button id="zoneVideoModalClose" class="zone-video-close" aria-label="Close video modal">×</button>
             </div>
             <div class="zone-video-body">
+                <div id="zoneVideoClipList" class="zone-video-clip-list"></div>
                 <video id="zoneVideoPlayer" class="zone-video-player" controls playsinline preload="metadata"></video>
                 <div id="zoneVideoStatus" class="zone-video-status"></div>
-                <div id="zoneVideoClipList" class="zone-video-clip-list"></div>
+                <div id="zoneVideoMetrics" class="zone-video-metrics" style="display:none">
+                    <div id="zoneVideoMetricsTitle" class="zone-video-metrics-title">Activity</div>
+                    <div id="zoneVideoMetricsGrid" class="zone-video-metrics-content"></div>
+                </div>
                 <div id="zoneVideoEmpty" class="zone-video-empty" style="display:none">No video clips available for this zone.</div>
             </div>
         </div>
@@ -1426,6 +1532,22 @@
                 </div>
             </div>
 
+            <div class="settings-benchmark-card">
+                <div style="font-size:13px;color:var(--hdr);font-weight:600;margin-bottom:4px">Productivity Benchmarks (MH/mod)</div>
+                <table class="settings-benchmark-table">
+                    <thead>
+                        <tr><th>Scope</th><th>Benchmark</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>Journals &amp; Drive</td><td><input type="number" id="benchmarkJournalsDriveInput" step="0.001" min="0" value="0.006" style="width:90px"></td></tr>
+                        <tr><td>Torque Beams &amp; Dampers</td><td><input type="number" id="benchmarkTorqueBeamsDampersInput" step="0.001" min="0" value="0.016" style="width:90px"></td></tr>
+                        <tr><td>Module Rails &amp; Controls</td><td><input type="number" id="benchmarkModuleRailsControlsInput" step="0.001" min="0" value="0.010" style="width:90px"></td></tr>
+                        <tr><td>Modules</td><td><input type="number" id="benchmarkModulesInput" step="0.001" min="0" value="0.021" style="width:90px"></td></tr>
+                    </tbody>
+                </table>
+                <div style="font-size:12px;color:#55636f;margin-top:6px">Current demo video clips are module-install clips, so module benchmark (0.021 MH/mod) is used for comparison.</div>
+            </div>
+
             <div style="margin-bottom:10px;padding:8px;background:#f9f9f9;border-radius:6px;border:1px solid var(--bdr)">
                 <div style="font-size:13px;color:var(--hdr);font-weight:600;margin-bottom:4px">Manual Date Entries</div>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
@@ -1543,6 +1665,12 @@
     // We intercept: when it becomes visible, show our styled timeline instead.
     // We also bridge the original slider events to our custom rail.
 
+    function closeDetailPanelIfOpen() {
+        const panel = document.getElementById('detail-panel');
+        if (!panel || !panel.classList.contains('open')) return;
+        if (typeof _closePanel === 'function') _closePanel();
+    }
+
     function syncTimelineUI(index, dates) {
         if (!dates || !dates.length) return;
         const safeIndex = Math.max(0, Math.min(parseInt(index, 10) || 0, dates.length - 1));
@@ -1563,6 +1691,7 @@
             s.className = 'tl-label' + (i === safeIndex ? ' active' : '');
             s.textContent = d.label || d.display || '';
             s.addEventListener('click', () => {
+                closeDetailPanelIfOpen();
                 const slider = document.getElementById('timelineSlider');
                 slider.value = i;
                 slider.dispatchEvent(new Event('change'));
@@ -1585,6 +1714,7 @@
             }
             dot.addEventListener('click', e => {
                 e.stopPropagation();
+                closeDetailPanelIfOpen();
                 const slider = document.getElementById('timelineSlider');
                 slider.value = i;
                 slider.dispatchEvent(new Event('change'));
@@ -1595,6 +1725,7 @@
 
     // Click on custom rail
     document.getElementById('tl-track-wrap').addEventListener('click', e => {
+        closeDetailPanelIfOpen();
         const rail = document.getElementById('tl-rail').getBoundingClientRect();
         const frac = Math.max(0, Math.min(1, (e.clientX - rail.left) / rail.width));
         const slider = document.getElementById('timelineSlider');
@@ -1604,6 +1735,11 @@
         slider.dispatchEvent(new Event('change'));
         slider.dispatchEvent(new Event('input'));
     });
+    const _timelineSliderEl = document.getElementById('timelineSlider');
+    if (_timelineSliderEl) {
+        _timelineSliderEl.addEventListener('input', closeDetailPanelIfOpen);
+        _timelineSliderEl.addEventListener('change', closeDetailPanelIfOpen);
+    }
 
     // ── BACK BUTTONS ──────────────────────────────────────────────────
     // Original JS wires these via addEventListener — we just make them visible.
@@ -1867,6 +2003,9 @@
     const _STAGE_COL = { pile:'#7B4FA0', torque_tube:'#5a005a', module_rails:'#1565C0', solar_panel:'#00008B' };
     const _STAGE_HEX = { pile:'#c8a8e8', torque_tube:'#7b3fa0', module_rails:'#87cefa', solar_panel:'#00008b' };
 
+    const _ZONE_PREVIEW_STAGE_KEYS = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+    const _zonePreviewSummaryCache = new Map();
+
     function _zoneInfo(zone) {
         return (typeof zoneMeta !== 'undefined' && zoneMeta)
             ? (zoneMeta.zones || []).find(z => z.zone === zone) || null
@@ -1875,21 +2014,14 @@
     function _stageLabel(zone) { const z = _zoneInfo(zone); return z && z.stage ? (_STAGE_MAP[z.stage] || z.stage) : null; }
     function _stageKey(zone)   { const z = _zoneInfo(zone); return z ? z.stage : null; }
 
-    // ── build panel body HTML ─────────────────────────────────────────────
-    function _buildZonePreviewBody(zone) {
-        const sk = _stageKey(zone);
-        const stageHex   = sk ? (_STAGE_HEX[sk]  || '#014059') : '#014059';
-        const stageLabel = sk ? (_STAGE_MAP[sk] || sk) : 'Unknown';
-
-        // Tracker counts from site data (best available)
-        const stageKeys = ['pile','torque_tube','module_rails','solar_panel'];
-        const counts = (typeof siteStageCounts !== 'undefined') ? siteStageCounts : {};
-        const total  = (typeof siteTotalTrackers !== 'undefined') ? siteTotalTrackers : 0;
-
-        const progressRows = stageKeys.map(k => {
+    function _buildZoneProgressRowsFromSummary(summary) {
+        const stageStatusCounts = summary?.stageStatusCounts || {};
+        const totalTrackers = Math.max(0, parseInt(summary?.totalTrackers, 10) || 0);
+        return _ZONE_PREVIEW_STAGE_KEYS.map(k => {
             const lbl = _STAGE_MAP[k] || k;
-            const cnt = counts[k] || 0;
-            const pct = total > 0 ? Math.round(cnt / total * 100) : 0;
+            const stageCounts = stageStatusCounts[k] || {};
+            const cnt = Object.values(stageCounts).reduce((sum, value) => sum + (parseInt(value, 10) || 0), 0);
+            const pct = totalTrackers > 0 ? Math.round((cnt / totalTrackers) * 100) : 0;
             const col = _STAGE_HEX[k] || '#014059';
             return `<div class="zp-prow">
                 <div class="zp-ptop">
@@ -1897,6 +2029,37 @@
                     <span class="zp-ppct">${pct}%</span>
                 </div>
                 <div class="zp-ptrk"><div class="zp-pfil" style="width:${pct}%;background:${col}"></div></div>
+            </div>`;
+        }).join('');
+    }
+
+    async function _loadZonePreviewSummary(zone, dateId) {
+        if (!zone || !dateId) return null;
+        const cacheKey = `${zone}::${dateId}`;
+        if (_zonePreviewSummaryCache.has(cacheKey)) return _zonePreviewSummaryCache.get(cacheKey);
+        const resp = await fetch(`/api/date_summary/${encodeURIComponent(dateId)}?zone=${encodeURIComponent(zone)}`, { cache: 'no-store' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const summary = await resp.json();
+        if (!summary || summary.error) throw new Error(summary?.error || 'Zone summary unavailable');
+        _zonePreviewSummaryCache.set(cacheKey, summary);
+        return summary;
+    }
+
+    // ── build panel body HTML ─────────────────────────────────────────────
+    function _buildZonePreviewBody(zone) {
+        const sk = _stageKey(zone);
+        const stageHex   = sk ? (_STAGE_HEX[sk]  || '#014059') : '#014059';
+        const stageLabel = sk ? (_STAGE_MAP[sk] || sk) : 'Unknown';
+
+        const progressRows = _ZONE_PREVIEW_STAGE_KEYS.map(k => {
+            const lbl = _STAGE_MAP[k] || k;
+            const col = _STAGE_HEX[k] || '#014059';
+            return `<div class="zp-prow">
+                <div class="zp-ptop">
+                    <span class="zp-pname">${lbl}</span>
+                    <span class="zp-ppct">-</span>
+                </div>
+                <div class="zp-ptrk"><div class="zp-pfil" style="width:0%;background:${col}"></div></div>
             </div>`;
         }).join('');
 
@@ -1917,7 +2080,8 @@
                     <div class="zp-mlbl">Current Stage</div>
                 </div>
             </div>
-            ${total > 0 ? `<div class="zp-slbl">Site Stage Distribution</div>${progressRows}` : ''}
+            <div class="zp-slbl">Site Stage Distribution</div>
+            <div id="zp-stage-distribution">${progressRows}</div>
             <div class="zp-abox" style="margin-top:10px">
                 <div class="zp-aico">i</div>
                 <div class="zp-atxt">
@@ -1979,6 +2143,17 @@
             : ((typeof availableDates !== 'undefined' && availableDates.length)
                 ? availableDates[availableDates.length - 1].date : null);
         _loadZonePreviewImage(zone, dateId);
+        _loadZonePreviewSummary(zone, dateId)
+            .then(summary => {
+                if (_previewZone !== zone) return;
+                const stageDistribution = document.getElementById('zp-stage-distribution');
+                if (stageDistribution) stageDistribution.innerHTML = _buildZoneProgressRowsFromSummary(summary);
+            })
+            .catch(() => {
+                if (_previewZone !== zone) return;
+                const stageDistribution = document.getElementById('zp-stage-distribution');
+                if (stageDistribution) stageDistribution.innerHTML = '';
+            });
     }
 
     function _loadZonePreviewImage(zone, dateId) {
@@ -2317,8 +2492,10 @@
 
                 const clips = Array.isArray(z.video_clips) ? z.video_clips : [];
                 if (clips.length > 0) {
-                    const iconRadius = Math.max(8, Math.min(12, Math.min(bw, bh) * 0.15));
-                    const iconPad = Math.max(3, iconRadius * 0.28);
+                    const preferredIconRadius = 8;
+                    const maxRadiusForZone = Math.max(6, (Math.min(bw, bh) - 6) / 2);
+                    const iconRadius = Math.min(preferredIconRadius, maxRadiusForZone);
+                    const iconPad = 3;
                     const cx = x2 - iconRadius - iconPad;
                     const cy = y1 + iconRadius + iconPad;
                     zoneVideoIconHitboxes.push({
@@ -2330,7 +2507,7 @@
                         clips,
                     });
                     ctx.save();
-                    const iconSize = iconRadius * 2.25;
+                    const iconSize = iconRadius * 2;
                     const iconX = cx - (iconSize / 2);
                     const iconY = cy - (iconSize / 2);
                     if (zoneVideoIconImage && zoneVideoIconReady) {
@@ -2579,13 +2756,6 @@
         function renderSiteStageKpiStrip(dateId, stageCountsInput = null) {
             const kpiStrip = document.getElementById('site-stage-kpi-strip');
             if (!kpiStrip || !HAS_ZONES) return;
-            /* KPIs are site-level — skip re-render on date-slider-driven calls.
-               Callers that legitimately need a refresh (init, settings change) must
-               set siteKpiLoaded = false before calling. */
-            if (siteKpiLoaded) {
-                kpiStrip.style.display = (isZonePickerActive && !selectedZone) ? 'block' : 'none';
-                return;
-            }
             const stageCounts = stageCountsInput || siteStageCounts || {};
             const stageTotalTrackers = Object.values(stageCounts).reduce((a, b) => a + b, 0);
             const hasAnyData = stageTotalTrackers > 0 || stageDefinitions.some(stage => (stageCounts[stage.key] || 0) > 0);
@@ -2596,12 +2766,10 @@
             }
             /* Denominator: total trackers from info JSON, else fall back to staged total */
             const denominator = PROJECT_TOTAL_TRACKERS > 0 ? PROJECT_TOTAL_TRACKERS : stageTotalTrackers;
-            /* Rate should reflect the latest available flight date. */
-            const latestFlightDateId = availableDates.length
-                ? (availableDates[availableDates.length - 1].display || availableDates[availableDates.length - 1].date)
-                : null;
-            const latestRateDateId = latestFlightDateId
-                || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : dateId);
+            /* Rate should reflect the selected timeline date. */
+            const selectedRateDateId = dateId
+                || currentDate
+                || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : null);
             const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
                 ? siteStageProgressStatusCounts
                 : (siteStageStatusCounts || {});
@@ -2650,7 +2818,7 @@
                 };
                 const stagePercentDenominator = overallTotal > 0 ? overallTotal : 1;
                 const pctComplete = stagePercentDenominator > 0 ? ((stageCompleted / stagePercentDenominator) * 100) : 0;
-                const trackerRatePerDay = getCurrentWorkingDayStageRate(stage.key, latestRateDateId);
+                const trackerRatePerDay = getCurrentWorkingDayStageRate(stage.key, selectedRateDateId);
                 const componentRatePerDay = trackerRatePerDay == null
                     ? null
                     : trackerRatePerDay * getStageComponentsPerTracker(stage.key);
@@ -2864,6 +3032,7 @@
             if (railsInput) railsInput.value = RAILS_PER_TRACKER.toString();
             if (workingDaysDisplay) workingDaysDisplay.textContent = `Working days: ${formatWorkingDaySummary(PROJECT_WORKING_DAYS) || 'Not set'}`;
             if (projectDateRangeDisplay) projectDateRangeDisplay.textContent = `Date range: ${PROJECT_START_DATE || 'Not set'} to ${PROJECT_END_DATE || 'Not set'}`;
+            syncBenchmarkSettingsPanel();
         }
 
         async function loadProjectSettings() {
@@ -3155,6 +3324,151 @@
             status.classList.toggle('error', Boolean(isError && text));
         }
 
+        const zoneVideoManualMetrics = Object.freeze({
+            'clip1.mp4': Object.freeze({ durationSec: 68, modulesInstalled: 2, crew: 6, mhPerMod: '0.057' }),
+            'clip2.mp4': Object.freeze({ durationSec: 88, modulesInstalled: 12, crew: 8, mhPerMod: '0.016' }),
+            'clip3.mp4': Object.freeze({ durationSec: 74, modulesInstalled: 7, crew: 10, mhPerMod: '0.029' }),
+            'clip4.mp4': Object.freeze({ durationSec: 84, modulesInstalled: 9, crew: 8, mhPerMod: '0.021' }),
+        });
+        const defaultZoneVideoBenchmarks = Object.freeze({
+            journalsDrive: 0.006,
+            torqueBeamsDampers: 0.016,
+            moduleRailsControls: 0.010,
+            modules: 0.021,
+        });
+        let zoneVideoBenchmarks = { ...defaultZoneVideoBenchmarks };
+
+        function _normalizeBenchmarkValue(value, fallback) {
+            const num = parseFloat(value);
+            if (Number.isNaN(num) || num < 0) return fallback;
+            return num;
+        }
+
+        function _getActiveZoneVideoClip() {
+            if (!activeZoneVideoContext || !Array.isArray(activeZoneVideoContext.clips)) return null;
+            const idx = Math.max(0, Math.min(activeZoneVideoContext.index || 0, activeZoneVideoContext.clips.length - 1));
+            return activeZoneVideoContext.clips[idx] || null;
+        }
+
+        function syncBenchmarkSettingsPanel() {
+            const jdInput = document.getElementById('benchmarkJournalsDriveInput');
+            const tbInput = document.getElementById('benchmarkTorqueBeamsDampersInput');
+            const mrInput = document.getElementById('benchmarkModuleRailsControlsInput');
+            const modInput = document.getElementById('benchmarkModulesInput');
+
+            if (jdInput) jdInput.value = zoneVideoBenchmarks.journalsDrive.toFixed(3);
+            if (tbInput) tbInput.value = zoneVideoBenchmarks.torqueBeamsDampers.toFixed(3);
+            if (mrInput) mrInput.value = zoneVideoBenchmarks.moduleRailsControls.toFixed(3);
+            if (modInput) modInput.value = zoneVideoBenchmarks.modules.toFixed(3);
+        }
+
+        function bindBenchmarkSettingsInputs() {
+            const jdInput = document.getElementById('benchmarkJournalsDriveInput');
+            const tbInput = document.getElementById('benchmarkTorqueBeamsDampersInput');
+            const mrInput = document.getElementById('benchmarkModuleRailsControlsInput');
+            const modInput = document.getElementById('benchmarkModulesInput');
+
+            const applyChanges = () => {
+                zoneVideoBenchmarks.journalsDrive = _normalizeBenchmarkValue(jdInput?.value, defaultZoneVideoBenchmarks.journalsDrive);
+                zoneVideoBenchmarks.torqueBeamsDampers = _normalizeBenchmarkValue(tbInput?.value, defaultZoneVideoBenchmarks.torqueBeamsDampers);
+                zoneVideoBenchmarks.moduleRailsControls = _normalizeBenchmarkValue(mrInput?.value, defaultZoneVideoBenchmarks.moduleRailsControls);
+                zoneVideoBenchmarks.modules = _normalizeBenchmarkValue(modInput?.value, defaultZoneVideoBenchmarks.modules);
+                syncBenchmarkSettingsPanel();
+
+                const activeClip = _getActiveZoneVideoClip();
+                if (activeClip) renderZoneVideoManualMetrics(activeZoneVideoContext?.zone, activeClip);
+            };
+
+            [jdInput, tbInput, mrInput, modInput].forEach((input) => {
+                if (!input) return;
+                input.onchange = applyChanges;
+            });
+        }
+
+        function getClipFileNameFromPath(value) {
+            const raw = String(value || '').split('?')[0].replaceAll('\\', '/').trim();
+            if (!raw) return '';
+            const parts = raw.split('/').filter(Boolean);
+            return (parts[parts.length - 1] || '').toLowerCase();
+        }
+
+        function resolveManualMetricsKeyForClip(clip) {
+            const pathFileName = getClipFileNameFromPath(clip?.clip_name || clip?.manifest_path);
+            if (pathFileName && zoneVideoManualMetrics[pathFileName]) return pathFileName;
+
+            const candidates = [pathFileName, String(clip?.label || '').toLowerCase()];
+            for (const candidate of candidates) {
+                const match = candidate.match(/clip\s*([0-9]+)/i);
+                if (!match) continue;
+                const key = `clip${match[1]}.mp4`;
+                if (zoneVideoManualMetrics[key]) return key;
+            }
+            return '';
+        }
+
+        function renderZoneVideoManualMetrics(zone, clip) {
+            const panel = document.getElementById('zoneVideoMetrics');
+            const grid = document.getElementById('zoneVideoMetricsGrid');
+            const title = document.getElementById('zoneVideoMetricsTitle');
+            if (!panel || !grid || !title) return;
+
+            grid.innerHTML = '';
+            const metricsKey = resolveManualMetricsKeyForClip(clip);
+            const metrics = metricsKey ? zoneVideoManualMetrics[metricsKey] : null;
+            title.textContent = `Activity ${zone || ''}`.trim();
+
+            panel.style.display = '';
+            if (!metrics) {
+                const fallback = document.createElement('div');
+                fallback.className = 'zone-video-metrics-fallback';
+                fallback.textContent = 'Metrics unavailable for this clip.';
+                grid.appendChild(fallback);
+                return;
+            }
+
+            const fields = [
+                ['Duration', `${metrics.durationSec} sec`],
+                ['Modules installed', String(metrics.modulesInstalled)],
+                ['Crew', String(metrics.crew)],
+                ['MH/mod', String(metrics.mhPerMod)],
+                ['Benchmark (Modules)', zoneVideoBenchmarks.modules.toFixed(3)],
+            ];
+            const mhPerModValue = parseFloat(metrics.mhPerMod);
+            const benchmarkValue = zoneVideoBenchmarks.modules;
+            const deltaValue = mhPerModValue - benchmarkValue;
+            const deltaText = `${deltaValue > 0 ? '+' : '-'}${Math.abs(deltaValue).toFixed(3)}`;
+            fields.push(['Comparison vs benchmark', `${deltaText} against benchmark`]);
+
+            const table = document.createElement('table');
+            table.className = 'zone-video-metrics-table';
+            const tbody = document.createElement('tbody');
+            fields.forEach(([label, value], idx) => {
+                const row = document.createElement('tr');
+                const labelCell = document.createElement('td');
+                labelCell.textContent = label;
+                const valueCell = document.createElement('td');
+                valueCell.textContent = value;
+                if (idx === fields.length - 1) {
+                    valueCell.classList.add(deltaValue <= 0 ? 'zone-video-metric-good' : 'zone-video-metric-bad');
+                }
+                row.appendChild(labelCell);
+                row.appendChild(valueCell);
+                tbody.appendChild(row);
+            });
+            table.appendChild(tbody);
+            grid.appendChild(table);
+        }
+
+        function resetZoneVideoManualMetrics() {
+            const panel = document.getElementById('zoneVideoMetrics');
+            const grid = document.getElementById('zoneVideoMetricsGrid');
+            const title = document.getElementById('zoneVideoMetricsTitle');
+            if (!panel || !grid) return;
+            grid.innerHTML = '';
+            if (title) title.textContent = 'Activity';
+            panel.style.display = 'none';
+        }
+
         const zoneVideoDebugEnabled = (() => {
             try {
                 const fromStorage = localStorage.getItem('zoneVideoDebug');
@@ -3209,6 +3523,19 @@
             return url;
         }
 
+        function _zoneVideoClipDisplayName(clip) {
+            const candidate = clip?.label || clip?.clip_name || clip?.manifest_path || '';
+            const fileName = getClipFileNameFromPath(candidate);
+            return fileName || String(candidate || '').trim() || 'Video';
+        }
+
+        function setZoneVideoModalTitle(zone, dateId, clip = null) {
+            const title = document.getElementById('zoneVideoModalTitle');
+            if (!title) return;
+            const base = `Zone ${zone} · ${dateId || ''}`.trim();
+            title.textContent = base;
+        }
+
         function getZoneVideoHitFromClick(event) {
             if (!isZonePickerActive || selectedZone) return null;
             if (!Array.isArray(zoneVideoIconHitboxes) || zoneVideoIconHitboxes.length === 0) return null;
@@ -3240,6 +3567,7 @@
             clipList.innerHTML = '';
             empty.style.display = 'none';
             setZoneVideoStatus('');
+            resetZoneVideoManualMetrics();
             modal.classList.remove('open');
             modal.setAttribute('aria-hidden', 'true');
             activeZoneVideoContext = null;
@@ -3253,6 +3581,8 @@
             const clip = clips[index];
             const url = getZoneVideoUrl(zone, dateId, clip);
             if (!url) return;
+            setZoneVideoModalTitle(zone, dateId, clip);
+            renderZoneVideoManualMetrics(zone, clip);
             zoneVideoDebugLog('play:start', {
                 zone,
                 dateId,
@@ -3345,7 +3675,7 @@
             const clipList = document.getElementById('zoneVideoClipList');
             const empty = document.getElementById('zoneVideoEmpty');
             if (!modal || !title || !clipList || !empty) return;
-            title.textContent = `Zone ${zone} · ${dateId || ''}`.trim();
+            setZoneVideoModalTitle(zone, dateId);
             clipList.innerHTML = '';
             const list = Array.isArray(clips) ? clips : [];
             zoneVideoDebugLog('modal:open', {
@@ -3357,6 +3687,7 @@
             if (list.length === 0) {
                 empty.style.display = '';
                 setZoneVideoStatus('');
+                resetZoneVideoManualMetrics();
                 modal.classList.add('open');
                 modal.setAttribute('aria-hidden', 'false');
                 zoneVideoDebugLog('modal:no-clips', { zone, dateId });
@@ -3983,6 +4314,7 @@
             if (pilesInput) { pilesInput.value = PILES_PER_TRACKER.toString(); pilesInput.onchange = (e) => { const v = parseFloat(e.target.value); PILES_PER_TRACKER = isNaN(v)||v<0?0:v; if (isZonePickerActive) { siteKpiLoaded = false; renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts); } }; }
             if (tubesInput) { tubesInput.value = TUBES_PER_TRACKER.toString(); tubesInput.onchange = (e) => { const v = parseFloat(e.target.value); TUBES_PER_TRACKER = isNaN(v)||v<0?0:v; if (isZonePickerActive) { siteKpiLoaded = false; renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts); } }; }
             if (railsInput) { railsInput.value = RAILS_PER_TRACKER.toString(); railsInput.onchange = (e) => { const v = parseFloat(e.target.value); RAILS_PER_TRACKER = isNaN(v)||v<0?0:v; if (isZonePickerActive) { siteKpiLoaded = false; renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts); } }; }
+            bindBenchmarkSettingsInputs();
         }
 
         function initializeDailyPieChart() {
