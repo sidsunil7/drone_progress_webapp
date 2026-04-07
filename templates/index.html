@@ -387,6 +387,7 @@
             box-shadow: -2px 0 8px rgba(0,0,0,0.09);
             font-size: 14px; color: var(--txtm);
         }
+        #detail-panel:not(.open) #panel-handle { display: none; }
         #panel-handle:hover { color: var(--txt); }
 
         /* panel header */
@@ -607,6 +608,11 @@
         .ov-table .td-zone { color: var(--link); font-weight: 600; cursor: pointer; }
         .ov-table .td-pct-good { color: var(--hdr); font-weight: 700; }
         .ov-table .td-pct-zero { color: var(--txtm); }
+        #siteOverviewTable {
+            max-height: min(44vh, 380px);
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
         #siteOverviewTable .site-overview-summary { font-size: 12px; margin-bottom: 8px; line-height: 1.6; }
         .site-overview-table { width: 100%; border-collapse: collapse; font-size: 12px; }
         .site-overview-table th, .site-overview-table td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: right; }
@@ -1346,9 +1352,6 @@
             <span>Site Overview</span>
             <button class="oc-close" id="overview-close-btn">×</button>
         </div>
-        <div class="oc-section" id="siteOverviewSummarySection">
-            <div class="oc-row"><span>Total Zones</span><span>—</span></div>
-        </div>
         <div class="oc-section" id="siteOverviewTable"></div>
         <div class="oc-section">
             <div class="p-section-title" style="margin-bottom:6px">Stages</div>
@@ -1801,7 +1804,7 @@
         const overviewCard = document.getElementById('overview-card');
         if (overviewCard) overviewCard.classList.remove('open');
         panel.classList.add('open');
-        document.getElementById('panel-handle').textContent = '›';
+            document.getElementById('panel-handle').textContent = '›';
         document.getElementById('panel-header').style.display = '';
         document.getElementById('panel-tabs').style.display   = '';
         document.getElementById('panel-footer').style.display = '';
@@ -1815,7 +1818,7 @@
     function _closePanel() {
         const panel = document.getElementById('detail-panel');
         panel.classList.remove('open', 'wide');
-        document.getElementById('panel-handle').textContent  = '‹';
+            document.getElementById('panel-handle').textContent  = '‹';
         document.getElementById('panel-header').style.display = 'none';
         document.getElementById('panel-tabs').style.display   = 'none';
         document.getElementById('panel-footer').style.display = 'none';
@@ -4008,8 +4011,8 @@
             if (data.stage_status_counts) siteStageStatusCounts = data.stage_status_counts;
             if (data.stage_progress_status_counts) siteStageProgressStatusCounts = data.stage_progress_status_counts;
             const summaryHtml = `<div class="site-overview-summary"><div>Total Number of Zones: ${totalZones}</div><div>Available zones: ${availableCount}</div><div>Number of Completed Zones: ${completedZones}</div></div>`;
-            const header = `<table class="site-overview-table"><thead><tr><th>Zone</th><th>Total</th><th>Completed</th><th>%</th></tr></thead><tbody>`;
-            const body = rows.map(r => `<tr><td>${r.zone}</td><td>${r.total}</td><td>${r.completed}</td><td>${r.pct}%</td></tr>`).join('');
+            const header = `<table class="site-overview-table"><thead><tr><th>Zone</th><th>Completed</th><th>%</th></tr></thead><tbody>`;
+            const body = rows.map(r => `<tr><td>${r.zone}</td><td>${r.completed}/${r.total}</td><td>${r.pct}%</td></tr>`).join('');
             renderSiteStageKpiStrip(dateId, stageCounts);
             container.innerHTML = summaryHtml + header + body + '</tbody></table>';
 
@@ -4233,6 +4236,15 @@
             return matrix[stageKey] || empty;
         }
 
+        function getProgressStatusColor(statusKey) {
+            const colors = {
+                not_started: '#b0bec5',
+                in_progress: '#fb8c00',
+                completed: '#43a047'
+            };
+            return colors[statusKey] || '#666';
+        }
+
         function updateProgressChart() {
             if (!window.progressChartInstance || !availableDates.length) return;
             const selectedStage = progressSelectedStageKey || 'pile';
@@ -4271,6 +4283,7 @@
                 type: 'bar',
                 stack: stageDef.label,
                 emphasis: { focus: 'series' },
+                itemStyle: { color: getProgressStatusColor(status.key) },
                 data: seriesDataByStatus[status.key] || []
             }));
             window.progressChartInstance.setOption({
@@ -4288,7 +4301,14 @@
             if (!window.manpowerChartInstance) return;
             const xDates = workingDaySeries.length ? workingDaySeries.map(row => row.date) : Object.keys(manpowerConfig).sort();
             const manpowerByDate = getForwardFilledManpowerMap(xDates);
-            const series = stageDefinitions.map(stage => ({ name: stage.label, type: 'bar', stack: 'manpower', emphasis: { focus: 'series' }, data: xDates.map(d => (manpowerByDate[d]?.[stage.key] ?? 0)) }));
+            const series = stageDefinitions.map(stage => ({
+                name: stage.label,
+                type: 'bar',
+                stack: 'manpower',
+                emphasis: { focus: 'series' },
+                itemStyle: { color: getStageColor(stage.key) },
+                data: xDates.map(d => (manpowerByDate[d]?.[stage.key] ?? 0))
+            }));
             window.manpowerChartInstance.setOption({ title: { text: 'Manpower by Stage', left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, legend: { top: 24 }, grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true }, xAxis: { type: 'category', data: xDates }, yAxis: { type: 'value', name: '# People' }, series }, true);
         }
 
@@ -4345,8 +4365,23 @@
             if (!xDates.length) { window.productivityMhMwChartInstance.clear(); window.productivityMhModChartInstance.clear(); return; }
             const mhMwSeries = [], mhModSeries = [];
             stageDefinitions.forEach(stage => {
-                mhMwSeries.push({ name: `${stage.label} MH/MW`, type: 'line', smooth: true, data: productivityRows.map(row => row.metrics[stage.key].mhPerMw == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMw))) });
-                mhModSeries.push({ name: `${stage.label} MH/mod`, type: 'line', smooth: true, data: productivityRows.map(row => row.metrics[stage.key].mhPerMod == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMod))) });
+                const stageColor = getStageColor(stage.key);
+                mhMwSeries.push({
+                    name: `${stage.label} MH/MW`,
+                    type: 'line',
+                    smooth: true,
+                    itemStyle: { color: stageColor },
+                    lineStyle: { color: stageColor },
+                    data: productivityRows.map(row => row.metrics[stage.key].mhPerMw == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMw)))
+                });
+                mhModSeries.push({
+                    name: `${stage.label} MH/mod`,
+                    type: 'line',
+                    smooth: true,
+                    itemStyle: { color: stageColor },
+                    lineStyle: { color: stageColor },
+                    data: productivityRows.map(row => row.metrics[stage.key].mhPerMod == null ? null : Number(formatNumericValue(row.metrics[stage.key].mhPerMod)))
+                });
             });
             window.productivityMhMwChartInstance.setOption({ title: { text: 'Productivity (MH/MW)', left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'axis' }, legend: { top: 24, type: 'scroll' }, grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true }, xAxis: { type: 'category', data: xDates }, yAxis: { type: 'value', name: 'MH / MW', min: 0 }, series: mhMwSeries }, true);
             window.productivityMhModChartInstance.setOption({ title: { text: 'Productivity (MH/mod)', left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'axis' }, legend: { top: 24, type: 'scroll' }, grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true }, xAxis: { type: 'category', data: xDates }, yAxis: { type: 'value', name: 'MH / mod', min: 0 }, series: mhModSeries }, true);
@@ -4416,7 +4451,11 @@
             if (!summary) { window.dailyPieChartInstance.clear(); const tl = document.getElementById('dailyPieTotal'); if (tl) tl.textContent = ''; return; }
             const totalLabel = document.getElementById('dailyPieTotal');
             if (totalLabel) totalLabel.textContent = `Total trackers: ${summary.totalTrackers || 0}`;
-            const data = stageDefinitions.map(stage => { const countsByStatus = summary.stageStatusCounts[stage.key] || {}; const totalForStage = statusDefinitions.reduce((acc, st) => acc + (countsByStatus[st.key] || 0), 0); return { name: stage.label, value: totalForStage }; }).filter(item => item.value > 0);
+            const data = stageDefinitions.map(stage => {
+                const countsByStatus = summary.stageStatusCounts[stage.key] || {};
+                const totalForStage = statusDefinitions.reduce((acc, st) => acc + (countsByStatus[st.key] || 0), 0);
+                return { name: stage.label, value: totalForStage, itemStyle: { color: getStageColor(stage.key) } };
+            }).filter(item => item.value > 0);
             window.dailyPieChartInstance.setOption({ title: { text: `Stage distribution on ${selectedDisp}`, left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' }, legend: { bottom: 0, type: 'scroll' }, series: [{ name: 'Stages', type: 'pie', radius: '60%', center: ['50%', '45%'], data }] });
         }
 
