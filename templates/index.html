@@ -4197,13 +4197,91 @@
             });
         }
 
+        function getAccumulatedProgressStatusCounts(summary, stageKey) {
+            const empty = { not_started: 0, in_progress: 0, completed: 0 };
+            if (!summary || !stageKey) return empty;
+
+            // Prefer backend-provided accumulated counts when available.
+            const direct = summary.stageProgressStatusCounts?.[stageKey];
+            if (direct) {
+                return {
+                    not_started: direct.not_started || 0,
+                    in_progress: direct.in_progress || 0,
+                    completed: direct.completed || 0
+                };
+            }
+
+            // Fallback: derive accumulated counts from per-tracker current stage/status.
+            const stageOrder = stageDefinitions.map(stage => stage.key);
+            const matrix = stageOrder.reduce((acc, key) => {
+                acc[key] = { not_started: 0, in_progress: 0, completed: 0 };
+                return acc;
+            }, {});
+            const trackerStages = Array.isArray(summary.trackerStages) ? summary.trackerStages : [];
+            trackerStages.forEach(ts => {
+                const currentStage = (ts?.stage || '').toLowerCase().replace(/\s+/g, '_');
+                const currentIdx = stageOrder.indexOf(currentStage);
+                if (currentIdx === -1) return;
+                let currentStatus = (ts?.status || '').toLowerCase().replace(/\s+/g, '_');
+                if (!['not_started', 'in_progress', 'completed'].includes(currentStatus)) currentStatus = 'not_started';
+                stageOrder.forEach((stage, idx) => {
+                    const mappedStatus = idx < currentIdx ? 'completed' : (idx > currentIdx ? 'not_started' : currentStatus);
+                    matrix[stage][mappedStatus] += 1;
+                });
+            });
+
+            return matrix[stageKey] || empty;
+        }
+
         function updateProgressChart() {
             if (!window.progressChartInstance || !availableDates.length) return;
             const selectedStage = progressSelectedStageKey || 'pile';
             const stageDef = stageDefinitions.find(s => s.key === selectedStage) || stageDefinitions[0];
             const xDates = availableDates.map(d => d.display);
-            const series = statusDefinitions.map(status => ({ name: status.label, type: 'bar', stack: stageDef.label, emphasis: { focus: 'series' }, data: xDates.map(disp => { const sum = allDateSummaries[disp]; if (!sum) return 0; return sum.stageStatusCounts[selectedStage]?.[status.key] || 0; }) }));
-            window.progressChartInstance.setOption({ title: { text: `Progress for ${stageDef.label}`, left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } }, legend: { top: 24 }, grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true }, xAxis: { type: 'category', data: xDates }, yAxis: { type: 'value', name: '# Trackers' }, series });
+            const siteInfoTotal = Math.max(0, parseInt(PROJECT_TOTAL_TRACKERS, 10) || 0);
+            const siteLevelTotal = isZonePickerActive ? (siteTotalTrackers || 0) : (totalTrackers || 0);
+            const summaryFallbackTotal = Math.max(
+                0,
+                ...xDates.map(disp => {
+                    const sum = allDateSummaries[disp];
+                    return sum?.totalTrackers || 0;
+                })
+            );
+            // Bars are normalized to total trackers from site info.
+            const designTotal = siteInfoTotal || Math.max(siteLevelTotal, summaryFallbackTotal);
+            const seriesDataByStatus = {};
+            statusDefinitions.forEach(status => { seriesDataByStatus[status.key] = []; });
+
+            xDates.forEach(disp => {
+                const sum = allDateSummaries[disp];
+                const stageCounts = getAccumulatedProgressStatusCounts(sum, selectedStage);
+                const completed = stageCounts.completed || 0;
+                const inProgress = stageCounts.in_progress || 0;
+                const normalizedCompleted = Math.max(0, Math.min(completed, designTotal));
+                const normalizedInProgress = Math.max(0, Math.min(inProgress, designTotal - normalizedCompleted));
+                // Keep every stacked bar at the project design total.
+                const notStarted = Math.max(0, designTotal - normalizedCompleted - normalizedInProgress);
+                seriesDataByStatus.not_started.push(notStarted);
+                seriesDataByStatus.in_progress.push(normalizedInProgress);
+                seriesDataByStatus.completed.push(normalizedCompleted);
+            });
+
+            const series = statusDefinitions.map(status => ({
+                name: status.label,
+                type: 'bar',
+                stack: stageDef.label,
+                emphasis: { focus: 'series' },
+                data: seriesDataByStatus[status.key] || []
+            }));
+            window.progressChartInstance.setOption({
+                title: { text: `Progress for ${stageDef.label}`, left: 'center', textStyle: { fontSize: 12 } },
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                legend: { top: 24 },
+                grid: { left: '3%', right: '4%', bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates },
+                yAxis: { type: 'value', name: '# Trackers', min: 0, max: designTotal },
+                series
+            });
         }
 
         function updateManpowerChart() {
