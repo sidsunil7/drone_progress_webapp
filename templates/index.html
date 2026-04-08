@@ -2956,6 +2956,7 @@
             const selectedRateDateId = dateId
                 || currentDate
                 || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : null);
+            const rateSeriesReady = workingDaySeries.length > 0;
             const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
                 ? siteStageProgressStatusCounts
                 : (siteStageStatusCounts || {});
@@ -3012,7 +3013,8 @@
                 const rateText = componentRatePerDay == null
                     ? ''
                     : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
-                const rateMarkup = siteKpiDataLoading
+                const showRateLoader = siteKpiDataLoading || !rateSeriesReady;
+                const rateMarkup = showRateLoader
                     ? `<span class="site-stage-kpi-stage-count">${getDatapointLoaderHtml()}</span>`
                     : (rateText ? `<span class="site-stage-kpi-stage-count">${rateText}</span>` : '');
                 const trackersMarkup = siteKpiDataLoading
