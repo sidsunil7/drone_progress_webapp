@@ -2801,6 +2801,15 @@
             const rate = row.perStage?.[stageKey];
             return (rate === null || rate === undefined || Number.isNaN(rate)) ? null : rate;
         }
+        function hasWorkingDayRateForDate(dateId) {
+            if (!workingDaySeries.length) return false;
+            const targetDate = normalizeIsoDate(dateId) || dateId;
+            let candidate = null;
+            for (const row of workingDaySeries) {
+                if (!targetDate || row.date <= targetDate) candidate = row;
+            }
+            return Boolean(candidate || workingDaySeries[workingDaySeries.length - 1]);
+        }
         let siteKpiLoaded = false;
         let siteKpiStageCounts = {};
         let siteKpiDataLoading = false;
@@ -2957,7 +2966,7 @@
             const selectedRateDateId = dateId
                 || currentDate
                 || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : null);
-            const rateSeriesReady = workingDaySeries.length > 0;
+            const rateSeriesReady = hasWorkingDayRateForDate(selectedRateDateId);
             const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
                 ? siteStageProgressStatusCounts
                 : (siteStageStatusCounts || {});
@@ -3014,7 +3023,7 @@
                 const rateText = componentRatePerDay == null
                     ? ''
                     : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
-                const showRateLoader = siteKpiDataLoading || summaryBuildActiveCount > 0 || !rateSeriesReady;
+                const showRateLoader = siteKpiDataLoading || !rateSeriesReady;
                 const rateMarkup = showRateLoader
                     ? `<span class="site-stage-kpi-stage-count">${getDatapointLoaderHtml()}</span>`
                     : `<span class="site-stage-kpi-stage-count">${rateText || '-'}</span>`;
@@ -4150,6 +4159,17 @@
                 const activeZoneDateId = lastZonePickerDateId || getLatestDateId(availableDates) || availableDates[availableDates.length - 1].date;
                 showDateChangeLoadingState(activeZoneDateId);
                 renderSiteOverviewTable(activeZoneDateId);
+                // Hydrate active-date rate quickly so components/day resolves
+                // without waiting for full all-date summary rebuild.
+                (async () => {
+                    try {
+                        await ensureSummaryForDate(activeZoneDateId);
+                        rebuildSummaryDerivedTables();
+                        if (isZonePickerActive && !selectedZone && lastZonePickerDateId === activeZoneDateId) {
+                            renderSiteStageKpiStrip(activeZoneDateId, siteKpiStageCounts || siteStageCounts);
+                        }
+                    } catch (_) {}
+                })();
             }
             _closePanel();
 
