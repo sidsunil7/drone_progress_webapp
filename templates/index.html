@@ -81,6 +81,38 @@
             inset: 0;
             display: block;
         }
+        #layoutWrapper.component-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 22px;
+            height: 22px;
+            margin-left: -11px;
+            margin-top: -11px;
+            border: 3px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 8;
+            pointer-events: none;
+        }
+        #layoutWrapper.component-loading::after {
+            content: 'Loading...';
+            position: absolute;
+            top: calc(50% + 18px);
+            left: 50%;
+            transform: translateX(-50%);
+            color: #1f2937;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #d5dde8;
+            border-radius: 999px;
+            padding: 3px 10px;
+            z-index: 8;
+            pointer-events: none;
+        }
         #layoutContainer {
             position: absolute;
             inset: 0;
@@ -366,6 +398,76 @@
             background: #ffebee; border-radius: 4px;
             border-left: 4px solid #d32f2f;
             max-width: 500px;
+        }
+        .component-loader {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            color: #334155;
+            background: rgba(255, 255, 255, 0.92);
+            border: 1px solid #d6e0eb;
+            border-radius: 999px;
+            padding: 6px 10px;
+        }
+        .circular-progress {
+            position: relative;
+            width: 20px;
+            height: 20px;
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .circular-progress svg {
+            width: 20px;
+            height: 20px;
+            transform: rotate(-90deg);
+            display: block;
+        }
+        .circular-progress-track {
+            fill: none;
+            stroke: rgba(37, 99, 235, 0.2);
+            stroke-width: 3;
+        }
+        .circular-progress-value {
+            fill: none;
+            stroke: #2563eb;
+            stroke-width: 3;
+            stroke-linecap: round;
+            stroke-dasharray: 43.98;
+            stroke-dashoffset: var(--cp-offset, 43.98);
+            transition: stroke-dashoffset 0.2s ease;
+        }
+        .circular-progress-text {
+            position: absolute;
+            font-size: 7px;
+            font-weight: 700;
+            color: #1d4ed8;
+            line-height: 1;
+            transform: translateY(0.5px);
+            user-select: none;
+        }
+        #siteOverviewTable .component-loader {
+            margin: 2px 0 6px;
+        }
+        #site-stage-kpi-strip.component-loading-inline::after {
+            content: '';
+            position: absolute;
+            top: 12px;
+            right: 14px;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(37, 99, 235, 0.22);
+            border-top-color: #2563eb;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 3;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
         }
 
         /* ════════════════════════════════════════
@@ -4044,6 +4146,11 @@
             if (!container || !HAS_ZONES) return;
             latestSiteOverviewDateRequest = dateId;
             let data = preloadedData || siteOverviewCache.get(dateId) || dateDataCache.get(dateId)?.siteOverview || null;
+            const needsNetwork = !data && !skipNetwork;
+            if (needsNetwork) {
+                container.innerHTML = getInlineLoaderHtml('Loading overview...');
+                setKpiStripLoading(true);
+            }
             if (!data && !skipNetwork) {
                 try { await fetchDateBundle(dateId); } catch (_) {}
                 data = siteOverviewCache.get(dateId) || dateDataCache.get(dateId)?.siteOverview || null;
@@ -4063,10 +4170,12 @@
             }
             if (latestSiteOverviewDateRequest !== dateId) return;
             if (!data) {
+                setKpiStripLoading(false);
                 container.innerHTML = '<div class="filter-summary-text">Loading site overview…</div>';
                 return;
             }
             renderSiteOverviewTableFromData(dateId, data);
+            setKpiStripLoading(false);
         }
 
         function returnToProjectSelection() { window.location.href = '/'; }
@@ -4677,6 +4786,53 @@
             }
             return ids;
         }
+        let loadingBatchStarted = 0;
+        let loadingBatchCompleted = 0;
+        let loadingBatchActive = 0;
+        function getLoadingProgressValue() {
+            if (loadingBatchStarted <= 0) return 0;
+            if (loadingBatchActive <= 0) return 100;
+            const ratio = loadingBatchCompleted / loadingBatchStarted;
+            const pct = Math.max(5, Math.min(99, Math.round(ratio * 100)));
+            return pct;
+        }
+        function getCircularProgressHtml(value = 0, ariaLabel = 'Loading…') {
+            const clamped = Math.max(0, Math.min(100, Math.round(value)));
+            const circumference = 43.98; // 2*pi*7
+            const offset = (circumference * (100 - clamped)) / 100;
+            return `<span class="circular-progress" role="status" aria-label="${ariaLabel}" data-determinate="true" data-value="${clamped}" style="--cp-offset:${offset.toFixed(2)}">
+                <svg viewBox="0 0 20 20" aria-hidden="true">
+                    <circle class="circular-progress-track" cx="10" cy="10" r="7"></circle>
+                    <circle class="circular-progress-value" cx="10" cy="10" r="7"></circle>
+                </svg>
+                <span class="circular-progress-text">${clamped}</span>
+            </span>`;
+        }
+        function updateInlineProgressIndicators() {
+            const value = getLoadingProgressValue();
+            const circumference = 43.98;
+            const offset = (circumference * (100 - value)) / 100;
+            document.querySelectorAll('.circular-progress[data-determinate="true"]').forEach((el) => {
+                el.setAttribute('data-value', String(value));
+                el.style.setProperty('--cp-offset', offset.toFixed(2));
+                const textEl = el.querySelector('.circular-progress-text');
+                if (textEl) textEl.textContent = String(value);
+            });
+        }
+        function getInlineLoaderHtml(message = 'Loading data...') {
+            const progress = getLoadingProgressValue();
+            return `<div class="component-loader">${getCircularProgressHtml(progress, 'Loading…')}<span>${message}</span></div>`;
+        }
+        function setLayoutComponentLoading(isLoading) {
+            const wrapper = document.getElementById('layoutWrapper');
+            if (!wrapper) return;
+            wrapper.classList.toggle('component-loading', Boolean(isLoading));
+        }
+        function setKpiStripLoading(isLoading) {
+            const strip = document.getElementById('site-stage-kpi-strip');
+            if (!strip) return;
+            strip.classList.toggle('component-loading-inline', Boolean(isLoading));
+        }
         async function ensureSummaryForDate(dateId) {
             const display = getDateDisplayForId(dateId);
             if (allDateSummaries[display]) return allDateSummaries[display];
@@ -4752,6 +4908,13 @@
 
         async function timedFetch(url, options = {}, label = 'fetch') {
             const start = performance.now();
+            if (loadingBatchActive === 0) {
+                loadingBatchStarted = 0;
+                loadingBatchCompleted = 0;
+            }
+            loadingBatchActive += 1;
+            loadingBatchStarted += 1;
+            updateInlineProgressIndicators();
             try {
                 const response = await fetch(url, options);
                 console.log(`[FetchTiming] ${label}: ${((performance.now()-start)/1000).toFixed(3)}s`, { url, status: response.status });
@@ -4759,6 +4922,10 @@
             } catch (error) {
                 console.error(`[FetchTiming] ${label} failed`, { url, error: error.message });
                 throw error;
+            } finally {
+                loadingBatchActive = Math.max(0, loadingBatchActive - 1);
+                loadingBatchCompleted = Math.min(loadingBatchStarted, loadingBatchCompleted + 1);
+                updateInlineProgressIndicators();
             }
         }
 
@@ -4783,6 +4950,7 @@
         }
         
         async function loadLayout(dateStr, preserveState = false) {
+            setLayoutComponentLoading(true);
             try {
                 if (HAS_ZONES && !selectedZone) return;
                 const renderToken = ++latestLayoutRenderToken;
@@ -4855,6 +5023,7 @@
                     img.onerror = () => { URL.revokeObjectURL(imageUrl); const sizeMB = (blob.size / (1024*1024)).toFixed(2); if (blob.size > 100*1024*1024) showError(`Image is too large (${sizeMB} MB) for browser to load.`); else showError(`Error loading layout image. Size: ${sizeMB} MB`); };
                 } catch (error) { showError(`Error fetching layout image: ${error.message}`); }
             } catch (error) { showError(`Error loading layout: ${error.message}`); }
+            finally { setLayoutComponentLoading(false); }
         }
         
         function setupCanvas(img) {
@@ -5057,11 +5226,12 @@
         }
         
         async function handleClick(event) {
-            const wrapperRect = canvasWrapper.getBoundingClientRect();
-            const clickX = event.clientX - wrapperRect.left;
-            const clickY = event.clientY - wrapperRect.top;
-            const canvasX = (clickX - panX) / zoomLevel;
-            const canvasY = (clickY - panY) / zoomLevel;
+            if (!canvas) return;
+            const canvasRect = canvas.getBoundingClientRect();
+            if (!canvasRect.width || !canvasRect.height) return;
+            /* Use rendered canvas bounds so zoom/pan transforms are accounted for once. */
+            const canvasX = (event.clientX - canvasRect.left) * (canvas.width / canvasRect.width);
+            const canvasY = (event.clientY - canvasRect.top) * (canvas.height / canvasRect.height);
             const displayX = canvasX * scaleX;
             const displayY = canvasY * scaleY;
             const originalX = displayX * imageScaleFactor;
