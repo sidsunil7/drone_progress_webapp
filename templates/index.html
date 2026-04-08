@@ -2602,6 +2602,9 @@
         function normalizeIsoDate(value) {
             if (!value) return null;
             if (typeof value === 'string' && ISO_DATE_PATTERN.test(value)) return value;
+            if (typeof value === 'string' && /^\d{8}$/.test(value)) {
+                return `${value.slice(0, 4)}-${value.slice(4, 6)}-${value.slice(6, 8)}`;
+            }
             const parsed = new Date(`${value}T00:00:00`);
             if (Number.isNaN(parsed.getTime())) return null;
             return formatLocalIsoDate(parsed);
