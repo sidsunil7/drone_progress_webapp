@@ -3499,6 +3499,147 @@ def get_site_overview():
     return response
 
 
+@app.route('/api/date_bundle')
+def get_date_bundle():
+    """Return date-scoped zones + site-overview + summary in one payload."""
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    date_id = request.args.get("date")
+    if not date_id:
+        return jsonify({'error': 'Date required'}), 400
+
+    project_layout_dir = get_layout_dir(project)
+    dir_sig = _get_dir_signature(project_layout_dir)
+    json_path = get_zone_json_path(project_layout_dir)
+    json_sig = get_file_signature(json_path) if json_path else (0, 0)
+    zone_bounds = _zone_bounds_cached(json_path, json_sig)
+    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
+    available_zones = [z for z in available_zones if zone_stage.get(z)]
+    overall_bounds = compute_zone_overall_bounds(zone_bounds)
+    if not overall_bounds:
+        return jsonify({'error': 'Unable to compute zone bounds'}), 500
+
+    if is_blob_video_backend_enabled():
+        zone_video_map = discover_zone_videos_blob(project, date_id)
+    elif is_blob_video_mount_backend_enabled():
+        zone_video_map = discover_zone_videos_blob_mount(project, date_id)
+    else:
+        zone_video_map = discover_zone_videos(project_layout_dir, date_id)
+
+    rows = []
+    stage_counts = {}
+    stage_status_counts = {}
+    stage_progress_status_counts = _init_stage_status_matrix()
+    agg_tracker_stages = []
+    agg_stage_status_counts = {}
+    agg_stage_progress_status_counts = _init_stage_status_matrix()
+    total_trackers = 0
+
+    for zone in available_zones:
+        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig)
+        if not best:
+            continue
+        date_folder_path = best[1]
+        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
+        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
+        csv_sig = optional_file_signature(csv_path)
+        status_json_sig = optional_file_signature(status_json_path)
+        tracker_info = get_tracker_info_from_sources(
+            csv_path, csv_sig, status_json_path, status_json_sig
+        )
+        if not tracker_info:
+            continue
+
+        total = len(tracker_info)
+        total_trackers += total
+        completed = 0
+        for info in tracker_info.values():
+            stage = (info.get("stage") or "").lower().replace(" ", "_")
+            status = (info.get("status") or "").lower().replace(" ", "_")
+            status_norm = (status or "not_started").strip().lower().replace(" ", "_") or "not_started"
+            if stage == "solar_panel" and status_norm == "completed":
+                completed += 1
+            if not stage:
+                continue
+
+            stage_counts[stage] = stage_counts.get(stage, 0) + 1
+            if stage not in stage_status_counts:
+                stage_status_counts[stage] = {}
+            stage_status_counts[stage][status_norm] = stage_status_counts[stage].get(status_norm, 0) + 1
+            _accumulate_normalized_stage_progress(
+                stage_progress_status_counts,
+                stage,
+                status_norm,
+            )
+
+            agg_tracker_stages.append({"stage": stage, "status": status_norm})
+            if stage not in agg_stage_status_counts:
+                agg_stage_status_counts[stage] = {}
+            agg_stage_status_counts[stage][status_norm] = (
+                agg_stage_status_counts[stage].get(status_norm, 0) + 1
+            )
+            _accumulate_normalized_stage_progress(
+                agg_stage_progress_status_counts,
+                stage,
+                status_norm,
+            )
+
+        pct = (completed / total * 100) if total > 0 else 0.0
+        rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
+
+    completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
+    total_zones = len(zone_bounds) if zone_bounds else len(rows)
+    bundle = {
+        "date": date_id,
+        "zones_data": {
+            'zones': [
+                {
+                    'zone': zone,
+                    'bounds': {
+                        'min_lat': bounds[0],
+                        'min_lon': bounds[1],
+                        'max_lat': bounds[2],
+                        'max_lon': bounds[3]
+                    },
+                    'available': zone in available_zones,
+                    'stage': zone_stage.get(zone),
+                    'video_clips': zone_video_map.get(zone, []),
+                    'has_video': bool(zone_video_map.get(zone)),
+                }
+                for zone, bounds in sorted(zone_bounds.items())
+            ],
+            'available_zones': available_zones,
+            'overall_bounds': overall_bounds,
+            'block_map_url': '/api/block_map',
+        },
+        "site_overview": {
+            "total_zones": total_zones,
+            "available_count": len(rows),
+            "completed_zones_count": completed_zones,
+            "zones": rows,
+            "stage_counts": stage_counts,
+            "stage_status_counts": stage_status_counts,
+            "stage_progress_status_counts": stage_progress_status_counts,
+        },
+        "summary": {
+            "stageStatusCounts": agg_stage_status_counts,
+            "stageProgressStatusCounts": agg_stage_progress_status_counts,
+            "totalTrackers": total_trackers,
+            "trackerStages": agg_tracker_stages,
+        },
+    }
+    log_timing(
+        "get_date_bundle",
+        request_start,
+        project=project,
+        date=date_id,
+        zones=len(available_zones),
+        rows=len(rows),
+    )
+    return jsonify(bundle)
+
+
 @app.route('/api/zone/image/<zone>/<date_str>')
 @app.route('/api/sonrisa/image/<zone>/<date_str>')
 def get_zone_image(zone, date_str):

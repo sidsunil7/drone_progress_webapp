@@ -2396,11 +2396,15 @@
         const trackerImageCache = new Map();
         const zoneMapDataCache = new Map();
         const siteOverviewCache = new Map();
+        const dateDataCache = new Map();
+        const pendingDateBundleRequests = new Map();
         const pendingSiteOverviewRequests = new Map();
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
+        let latestSiteOverviewDateRequest = null;
         const pendingZoneMapRequests = new Map();
         let latestSummaryRequestKey = null;
+        let latestSummaryPrefetchToken = null;
         let lastZonePickerDateId = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
@@ -2554,6 +2558,7 @@
         }
         let layoutLoadTimer = null;
         let latestLayoutLoadRequest = null;
+        let latestLayoutRenderToken = 0;
 
         let allDateSummaries = {};
         let workingDaySeries = [];
@@ -3072,6 +3077,18 @@
             } catch (error) { console.warn('Error loading project settings:', error); }
             syncProjectSettingsPanel();
         }
+        async function refreshAnalyticsViewsAfterSummaryLoad(summaryToken = null) {
+            if (summaryToken && latestSummaryPrefetchToken && summaryToken !== latestSummaryPrefetchToken) return;
+            initializeManpowerConfig();
+            buildWorkingDaySeries();
+            renderManpowerTable();
+            renderDailyTable();
+            renderRateTable();
+            renderProductivityTable();
+            updateStageCompletionEstimates();
+            initializeCharts();
+            initializeDailyPieChart();
+        }
         
         async function init() {
             try {
@@ -3092,22 +3109,10 @@
                 
                 availableDates = data.dates;
 
-                await computeAllDateSummaries();
-
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
                 const filterSection = document.getElementById('filterSection');
                 if (siteOverviewSection) siteOverviewSection.style.display = 'none';
                 if (filterSection) filterSection.style.display = 'block';
-
-                initializeManpowerConfig();
-                buildWorkingDaySeries();
-                renderManpowerTable();
-                renderDailyTable();
-                renderRateTable();
-                renderProductivityTable();
-                updateStageCompletionEstimates();
-                initializeCharts();
-                initializeDailyPieChart();
                 
                 const timelineContainer = document.getElementById('timelineContainer');
                 if (availableDates.length > 1) {
@@ -3140,6 +3145,16 @@
                 
                 currentDate = availableDates[0].date;
                 await loadLayout(currentDate);
+                latestSummaryPrefetchToken = `site-init|${Date.now()}`;
+                const summaryToken = latestSummaryPrefetchToken;
+                (async () => {
+                    try {
+                        await computeAllDateSummaries({ concurrency: 4, token: summaryToken, reset: true });
+                        await refreshAnalyticsViewsAfterSummaryLoad(summaryToken);
+                    } catch (error) {
+                        console.error('Background summary build failed:', error);
+                    }
+                })();
             } catch (error) { showError(`Error initializing: ${error.message}`); }
         }
 
@@ -3272,6 +3287,7 @@
                             const selectedDate = availableDates[index];
                             updateTimelineCurrent(index);
                             updateSelectedZoneBanner(selectedDate.date);
+                            renderZonePickerDateFromCache(selectedDate.date);
                             scheduleZoneMapUpdate(selectedDate.date);
                             syncTimelineUI(index, availableDates);
                         };
@@ -3286,6 +3302,7 @@
                         };
                         renderTimelineDots();
                         updateZoneMapForDate(lastZonePickerDateId);
+                        scheduleDateBundlePrefetch(availableDates.map(d => d.date), lastZonePickerDateId, 3);
                     }
                 } else if (timelineContainer) {
                     timelineContainer.style.display = 'none';
@@ -3293,19 +3310,13 @@
 
                 (async () => {
                     try {
-                        await computeAllDateSummaries();
-                        initializeManpowerConfig();
-                        buildWorkingDaySeries();
+                        latestSummaryPrefetchToken = `zone-picker|${Date.now()}`;
+                        const summaryToken = latestSummaryPrefetchToken;
+                        await computeAllDateSummaries({ concurrency: 4, token: summaryToken, reset: true });
+                        await refreshAnalyticsViewsAfterSummaryLoad(summaryToken);
                         /* Rates are now available — re-render KPI strip with real daily rates */
                         siteKpiLoaded = false;
                         renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts);
-                        renderManpowerTable();
-                        renderDailyTable();
-                        renderRateTable();
-                        renderProductivityTable();
-                        updateStageCompletionEstimates();
-                        initializeCharts();
-                        initializeDailyPieChart();
                     } catch (err) { console.error('Site-level summary build failed:', err); }
                 })();
             } catch (error) { showError(`Error loading zones: ${error.message}`); }
@@ -3860,6 +3871,7 @@
                     const selectedDate = availableDates[index];
                     updateTimelineCurrent(index);
                     updateSelectedZoneBanner(selectedDate.date);
+                    renderZonePickerDateFromCache(selectedDate.date);
                     scheduleLayoutLoad(selectedDate.date, true);
                     syncTimelineUI(index, availableDates);
                 };
@@ -3878,20 +3890,14 @@
 
             currentDate = preferredZoneDateId;
             await loadLayout(currentDate);
+            scheduleDateBundlePrefetch(availableDates.map(d => d.date), currentDate, 3);
 
             (async () => {
                 try {
-                    await computeAllDateSummaries();
+                    latestSummaryPrefetchToken = `zone-select|${zone}|${Date.now()}`;
+                    await computeAllDateSummaries({ concurrency: 4, token: latestSummaryPrefetchToken, reset: true });
                     if (latestSummaryRequestKey !== summaryRequestKey || selectedZone !== zone) return;
-                    initializeManpowerConfig();
-                    buildWorkingDaySeries();
-                    renderManpowerTable();
-                    renderDailyTable();
-                    renderRateTable();
-                    renderProductivityTable();
-                    updateStageCompletionEstimates();
-                    initializeCharts();
-                    initializeDailyPieChart();
+                    await refreshAnalyticsViewsAfterSummaryLoad(latestSummaryPrefetchToken);
                 } catch (error) {
                     if (latestSummaryRequestKey !== summaryRequestKey || selectedZone !== zone) return;
                     console.error('Background zone summary build failed:', error);
@@ -3933,7 +3939,7 @@
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
                     updateTimelineCurrent(restoredZoneDateIndex);
                     syncTimelineUI(restoredZoneDateIndex, availableDates);
-                    slider.oninput = (e) => { const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); scheduleZoneMapUpdate(selectedDate.date); syncTimelineUI(index, availableDates); };
+                    slider.oninput = (e) => { const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); renderZonePickerDateFromCache(selectedDate.date); scheduleZoneMapUpdate(selectedDate.date); syncTimelineUI(index, availableDates); };
                     slider.onchange = (e) => { if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; } const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); updateZoneMapForDate(selectedDate.date); syncTimelineUI(index, availableDates); };
                     renderTimelineDots();
                     updateZoneMapForDate(restoredZoneDateId);
@@ -3953,16 +3959,9 @@
 
             (async () => {
                 try {
-                    await computeAllDateSummaries();
-                    initializeManpowerConfig();
-                    buildWorkingDaySeries();
-                    renderManpowerTable();
-                    renderDailyTable();
-                    renderRateTable();
-                    renderProductivityTable();
-                    updateStageCompletionEstimates();
-                    initializeCharts();
-                    initializeDailyPieChart();
+                    latestSummaryPrefetchToken = `zone-return|${Date.now()}`;
+                    await computeAllDateSummaries({ concurrency: 4, token: latestSummaryPrefetchToken, reset: true });
+                    await refreshAnalyticsViewsAfterSummaryLoad(latestSummaryPrefetchToken);
                 } catch (err) { console.error('Site-level summary refresh failed:', err); }
             })();
 
@@ -3975,6 +3974,9 @@
             if (typeof closeZoneVideoModal === 'function') closeZoneVideoModal();
             latestZoneMapDateRequest = dateId;
             lastZonePickerDateId = dateId;
+            renderZonePickerDateFromCache(dateId);
+            try { await fetchDateBundle(dateId); } catch (_) {}
+            if (latestZoneMapDateRequest !== dateId) return;
             const cacheKey = `${dateId}`;
             let data = zoneMapDataCache.get(cacheKey);
             if (!data) {
@@ -3987,34 +3989,28 @@
                 if (!data.error) setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
             }
             if (latestZoneMapDateRequest !== dateId) return;
-            if (!data.error) zoneMeta = data;
-            drawBlockMapCanvas(data);
+            if (!data.error) {
+                zoneMeta = data;
+                drawBlockMapCanvas(data);
+                const existing = dateDataCache.get(dateId) || {};
+                dateDataCache.set(dateId, { ...existing, zonesData: data });
+            }
             await renderSiteOverviewTable(dateId);
         }
 
-        async function renderSiteOverviewTable(dateId) {
+        function renderSiteOverviewTableFromData(dateId, data) {
             const container = document.getElementById('siteOverviewTable');
             if (!container || !HAS_ZONES) return;
-            let data = siteOverviewCache.get(dateId);
-            if (!data) {
-                let pending = pendingSiteOverviewRequests.get(dateId);
-                if (!pending) {
-                    pending = (async () => { const resp = await timedFetch(`/api/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'site-overview'); return resp.json(); })();
-                    pendingSiteOverviewRequests.set(dateId, pending);
-                }
-                try { data = await pending; } finally { pendingSiteOverviewRequests.delete(dateId); }
-                if (!data.error) setLimitedCacheEntry(siteOverviewCache, dateId, data, 120);
-            }
             if (data.error || !data.zones) {
                 renderSiteStageKpiStrip(dateId, data?.stage_counts || siteStageCounts);
                 container.innerHTML = '<div class="filter-summary-text">' + (data.error || 'No zone data for this date.') + '</div>';
-                return;
+                return false;
             }
             const rows = data.zones;
             if (rows.length === 0) {
                 renderSiteStageKpiStrip(dateId, data?.stage_counts || siteStageCounts);
                 container.innerHTML = '<div class="filter-summary-text">No tracker data for this date.</div>';
-                return;
+                return true;
             }
 
             const totalZones = data.total_zones ?? 54;
@@ -4037,6 +4033,37 @@
                 siteTotalTrackers = Object.values(data.stage_counts).reduce((a, b) => a + b, 0);
                 if (isZonePickerActive) { renderStageFilters(); renderStatusFilters(); updateFilterSummary(); }
             }
+            return true;
+        }
+
+        async function renderSiteOverviewTable(dateId, preloadedData = null, skipNetwork = false) {
+            const container = document.getElementById('siteOverviewTable');
+            if (!container || !HAS_ZONES) return;
+            latestSiteOverviewDateRequest = dateId;
+            let data = preloadedData || siteOverviewCache.get(dateId) || dateDataCache.get(dateId)?.siteOverview || null;
+            if (!data && !skipNetwork) {
+                try { await fetchDateBundle(dateId); } catch (_) {}
+                data = siteOverviewCache.get(dateId) || dateDataCache.get(dateId)?.siteOverview || null;
+            }
+            if (!data && !skipNetwork) {
+                let pending = pendingSiteOverviewRequests.get(dateId);
+                if (!pending) {
+                    pending = (async () => { const resp = await timedFetch(`/api/site_overview?date=${encodeURIComponent(dateId)}`, {}, 'site-overview'); return resp.json(); })();
+                    pendingSiteOverviewRequests.set(dateId, pending);
+                }
+                try { data = await pending; } finally { pendingSiteOverviewRequests.delete(dateId); }
+                if (!data?.error) {
+                    setLimitedCacheEntry(siteOverviewCache, dateId, data, 120);
+                    const existing = dateDataCache.get(dateId) || {};
+                    dateDataCache.set(dateId, { ...existing, siteOverview: data });
+                }
+            }
+            if (latestSiteOverviewDateRequest !== dateId) return;
+            if (!data) {
+                container.innerHTML = '<div class="filter-summary-text">Loading site overview…</div>';
+                return;
+            }
+            renderSiteOverviewTableFromData(dateId, data);
         }
 
         function returnToProjectSelection() { window.location.href = '/'; }
@@ -4076,68 +4103,26 @@
             if (input) { const bounds = getAnalyticsDateBounds(); input.min = bounds.min || ''; input.max = bounds.max || ''; }
         }
 
-        async function computeAllDateSummaries() {
-            allDateSummaries = {};
-            for (const d of availableDates) {
-                const resp = await timedFetch(getDateSummaryUrl(d.date), {}, `date-summary-${d.date}`);
-                const summary = await resp.json();
-                if (!summary || summary.error) continue;
-                stageDefinitions.forEach(s => {
-                    if (!summary.stageStatusCounts[s.key]) summary.stageStatusCounts[s.key] = {};
-                    statusDefinitions.forEach(st => { if (!summary.stageStatusCounts[s.key][st.key]) summary.stageStatusCounts[s.key][st.key] = 0; });
-                });
-                allDateSummaries[d.display] = summary;
-            }
-
-            snapshotSeries = [];
-            const orderedStages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
-            availableDates.forEach(d => {
-                const disp = d.display;
-                const sum = allDateSummaries[disp];
-                if (!sum) return;
-                const row = { date: disp, perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }, total: sum.totalTrackers || 0 };
-                (sum.trackerStages || []).forEach(ts => {
-                    const idx = orderedStages.indexOf(ts.stage);
-                    if (idx === -1) return;
-                    if (ts.status === 'completed') { for (let i = 0; i <= idx; i++) { const key = orderedStages[i]; row.perStage[key] = (row.perStage[key] || 0) + 1; } }
-                    else { for (let i = 0; i < idx; i++) { const key = orderedStages[i]; row.perStage[key] = (row.perStage[key] || 0) + 1; } }
-                });
-                snapshotSeries.push(row);
-            });
-
-            if (PROJECT_START_DATE && snapshotSeries.length > 0 && PROJECT_START_DATE < snapshotSeries[0].date) {
-                const firstWorkingDayOnOrAfterStart = buildWorkingCalendarDates(PROJECT_START_DATE, snapshotSeries[0].date)[0];
-                if (firstWorkingDayOnOrAfterStart) snapshotSeries.unshift({ date: firstWorkingDayOnOrAfterStart, perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }, total: 0, virtual: true });
-            }
-
-            tableSeries = [];
-            if (snapshotSeries.length > 0) {
-                const firstSnap = snapshotSeries[0];
-                const lastSnap = snapshotSeries[snapshotSeries.length - 1];
-                const workingCalendarDates = buildWorkingCalendarDates(firstSnap.date, lastSnap.date);
-                const incrementsByDate = {};
-                for (let i = 1; i < snapshotSeries.length; i++) {
-                    const prev = snapshotSeries[i - 1];
-                    const cur = snapshotSeries[i];
-                    const isVirtualStart = prev.virtual === true;
-                    const workingDates = workingCalendarDates.filter(dateStr => (isVirtualStart ? dateStr >= prev.date : dateStr > prev.date) && dateStr <= cur.date);
-                    if (!workingDates.length) continue;
-                    orderedStages.forEach(stageKey => {
-                        const prevVal = prev.perStage[stageKey] || 0;
-                        const curVal = cur.perStage[stageKey] || 0;
-                        const delta = Math.max(0, curVal - prevVal);
-                        if (delta === 0) return;
-                        const perDay = delta / workingDates.length;
-                        workingDates.forEach(dateStr => { if (!incrementsByDate[dateStr]) incrementsByDate[dateStr] = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }; incrementsByDate[dateStr][stageKey] += perDay; });
-                    });
+        async function computeAllDateSummaries(options = {}) {
+            const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 4);
+            const reset = options?.reset !== false;
+            const token = options?.token || `${Date.now()}`;
+            if (reset) allDateSummaries = {};
+            const dateIds = availableDates.map(d => d.date);
+            let index = 0;
+            const workers = Array.from({ length: Math.min(concurrency, dateIds.length || 1) }, async () => {
+                while (index < dateIds.length) {
+                    const curIndex = index++;
+                    const dateId = dateIds[curIndex];
+                    try {
+                        await ensureSummaryForDate(dateId);
+                    } catch (_) {}
+                    if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
                 }
-                const firstSnapIsVirtual = firstSnap.virtual === true;
-                let cumulative = { pile: firstSnap.perStage.pile || 0, torque_tube: firstSnap.perStage.torque_tube || 0, module_rails: firstSnap.perStage.module_rails || 0, solar_panel: firstSnap.perStage.solar_panel || 0 };
-                workingCalendarDates.forEach(dateStr => {
-                    if (firstSnapIsVirtual || dateStr !== firstSnap.date) { const inc = incrementsByDate[dateStr]; if (inc) { orderedStages.forEach(stageKey => { cumulative[stageKey] += inc[stageKey] || 0; }); } }
-                    tableSeries.push({ date: dateStr, perStage: { ...cumulative }, total: 0 });
-                });
-            }
+            });
+            await Promise.allSettled(workers);
+            if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
+            rebuildSummaryDerivedTables();
             if (HAS_ZONES && isZonePickerActive && lastZonePickerDateId) {
                 renderSiteOverviewTable(lastZonePickerDateId);
             }
@@ -4555,6 +4540,182 @@
             if (HAS_ZONES) return `/api/site_date_summary/${dateStr}?project=${encodeURIComponent(PROJECT)}`;
             return `/api/date_summary/${dateStr}`;
         }
+        function getDateBundleUrl(dateStr) {
+            return `/api/date_bundle?date=${encodeURIComponent(dateStr)}&project=${encodeURIComponent(PROJECT)}`;
+        }
+        function getDateDisplayForId(dateId) {
+            return availableDates.find(d => d.date === dateId)?.display || dateId;
+        }
+        function normalizeSummaryForUi(summary) {
+            if (!summary || summary.error) return null;
+            const normalized = {
+                stageStatusCounts: summary.stageStatusCounts || {},
+                stageProgressStatusCounts: summary.stageProgressStatusCounts || {},
+                totalTrackers: parseInt(summary.totalTrackers, 10) || 0,
+                trackerStages: Array.isArray(summary.trackerStages) ? summary.trackerStages : [],
+            };
+            stageDefinitions.forEach(s => {
+                if (!normalized.stageStatusCounts[s.key]) normalized.stageStatusCounts[s.key] = {};
+                statusDefinitions.forEach(st => {
+                    if (!normalized.stageStatusCounts[s.key][st.key]) normalized.stageStatusCounts[s.key][st.key] = 0;
+                });
+            });
+            return normalized;
+        }
+        function storeSummaryForDate(dateId, summary) {
+            const normalized = normalizeSummaryForUi(summary);
+            if (!normalized) return null;
+            const display = getDateDisplayForId(dateId);
+            allDateSummaries[display] = normalized;
+            const cached = dateDataCache.get(dateId) || {};
+            cached.summary = normalized;
+            dateDataCache.set(dateId, cached);
+            return normalized;
+        }
+        function cacheDateBundlePayload(dateId, payload) {
+            if (!dateId || !payload || payload.error) return null;
+            const existing = dateDataCache.get(dateId) || {};
+            const merged = {
+                ...existing,
+                zonesData: payload.zones_data || existing.zonesData || null,
+                siteOverview: payload.site_overview || existing.siteOverview || null,
+                summary: normalizeSummaryForUi(payload.summary) || existing.summary || null,
+                bundleLoaded: true,
+            };
+            dateDataCache.set(dateId, merged);
+            if (merged.zonesData) setLimitedCacheEntry(zoneMapDataCache, `${dateId}`, merged.zonesData, 120);
+            if (merged.siteOverview) setLimitedCacheEntry(siteOverviewCache, dateId, merged.siteOverview, 120);
+            if (merged.summary) {
+                const display = getDateDisplayForId(dateId);
+                if (display) allDateSummaries[display] = merged.summary;
+            }
+            return merged;
+        }
+        async function fetchDateBundle(dateId) {
+            if (!dateId) return null;
+            const cached = dateDataCache.get(dateId);
+            if (cached?.bundleLoaded) return cached;
+            let pending = pendingDateBundleRequests.get(dateId);
+            if (!pending) {
+                pending = (async () => {
+                    const resp = await timedFetch(getDateBundleUrl(dateId), {}, `date-bundle-${dateId}`);
+                    return resp.json();
+                })();
+                pendingDateBundleRequests.set(dateId, pending);
+            }
+            let payload = null;
+            try {
+                payload = await pending;
+            } finally {
+                pendingDateBundleRequests.delete(dateId);
+            }
+            if (!payload || payload.error) return null;
+            return cacheDateBundlePayload(dateId, payload);
+        }
+        function renderZonePickerDateFromCache(dateId) {
+            const cached = dateDataCache.get(dateId) || {};
+            const zonesData = cached.zonesData || zoneMapDataCache.get(`${dateId}`);
+            if (zonesData && !zonesData.error) {
+                zoneMeta = zonesData;
+                drawBlockMapCanvas(zonesData);
+            }
+            const siteOverview = cached.siteOverview || siteOverviewCache.get(dateId);
+            if (siteOverview && !siteOverview.error) {
+                renderSiteOverviewTable(dateId, siteOverview, true);
+                return true;
+            }
+            return Boolean(zonesData);
+        }
+        function scheduleDateBundlePrefetch(dateIds, activeDateId = null, concurrency = 3) {
+            if (!Array.isArray(dateIds) || !dateIds.length) return;
+            const ordered = [...new Set(dateIds)];
+            if (activeDateId) {
+                const activeIndex = ordered.indexOf(activeDateId);
+                if (activeIndex >= 0) {
+                    const prioritized = [ordered[activeIndex]];
+                    for (let offset = 1; offset < ordered.length; offset++) {
+                        const left = activeIndex - offset;
+                        const right = activeIndex + offset;
+                        if (left >= 0) prioritized.push(ordered[left]);
+                        if (right < ordered.length) prioritized.push(ordered[right]);
+                    }
+                    ordered.splice(0, ordered.length, ...prioritized);
+                }
+            }
+            let idx = 0;
+            const workers = Array.from({ length: Math.max(1, concurrency) }, async () => {
+                while (idx < ordered.length) {
+                    const cur = ordered[idx++];
+                    const cached = dateDataCache.get(cur);
+                    if (cached?.bundleLoaded) continue;
+                    try { await fetchDateBundle(cur); } catch (_) {}
+                }
+            });
+            Promise.allSettled(workers);
+        }
+        async function ensureSummaryForDate(dateId) {
+            const display = getDateDisplayForId(dateId);
+            if (allDateSummaries[display]) return allDateSummaries[display];
+            const cached = dateDataCache.get(dateId);
+            if (cached?.summary) {
+                allDateSummaries[display] = cached.summary;
+                return cached.summary;
+            }
+            const resp = await timedFetch(getDateSummaryUrl(dateId), {}, `date-summary-${dateId}`);
+            const summary = await resp.json();
+            return storeSummaryForDate(dateId, summary);
+        }
+        function rebuildSummaryDerivedTables() {
+            snapshotSeries = [];
+            const orderedStages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            availableDates.forEach(d => {
+                const disp = d.display;
+                const sum = allDateSummaries[disp];
+                if (!sum) return;
+                const row = { date: disp, perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }, total: sum.totalTrackers || 0 };
+                (sum.trackerStages || []).forEach(ts => {
+                    const idx = orderedStages.indexOf(ts.stage);
+                    if (idx === -1) return;
+                    if (ts.status === 'completed') { for (let i = 0; i <= idx; i++) { const key = orderedStages[i]; row.perStage[key] = (row.perStage[key] || 0) + 1; } }
+                    else { for (let i = 0; i < idx; i++) { const key = orderedStages[i]; row.perStage[key] = (row.perStage[key] || 0) + 1; } }
+                });
+                snapshotSeries.push(row);
+            });
+
+            if (PROJECT_START_DATE && snapshotSeries.length > 0 && PROJECT_START_DATE < snapshotSeries[0].date) {
+                const firstWorkingDayOnOrAfterStart = buildWorkingCalendarDates(PROJECT_START_DATE, snapshotSeries[0].date)[0];
+                if (firstWorkingDayOnOrAfterStart) snapshotSeries.unshift({ date: firstWorkingDayOnOrAfterStart, perStage: { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }, total: 0, virtual: true });
+            }
+
+            tableSeries = [];
+            if (snapshotSeries.length > 0) {
+                const firstSnap = snapshotSeries[0];
+                const lastSnap = snapshotSeries[snapshotSeries.length - 1];
+                const workingCalendarDates = buildWorkingCalendarDates(firstSnap.date, lastSnap.date);
+                const incrementsByDate = {};
+                for (let i = 1; i < snapshotSeries.length; i++) {
+                    const prev = snapshotSeries[i - 1];
+                    const cur = snapshotSeries[i];
+                    const isVirtualStart = prev.virtual === true;
+                    const workingDates = workingCalendarDates.filter(dateStr => (isVirtualStart ? dateStr >= prev.date : dateStr > prev.date) && dateStr <= cur.date);
+                    if (!workingDates.length) continue;
+                    orderedStages.forEach(stageKey => {
+                        const prevVal = prev.perStage[stageKey] || 0;
+                        const curVal = cur.perStage[stageKey] || 0;
+                        const delta = Math.max(0, curVal - prevVal);
+                        if (delta === 0) return;
+                        const perDay = delta / workingDates.length;
+                        workingDates.forEach(dateStr => { if (!incrementsByDate[dateStr]) incrementsByDate[dateStr] = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 }; incrementsByDate[dateStr][stageKey] += perDay; });
+                    });
+                }
+                const firstSnapIsVirtual = firstSnap.virtual === true;
+                let cumulative = { pile: firstSnap.perStage.pile || 0, torque_tube: firstSnap.perStage.torque_tube || 0, module_rails: firstSnap.perStage.module_rails || 0, solar_panel: firstSnap.perStage.solar_panel || 0 };
+                workingCalendarDates.forEach(dateStr => {
+                    if (firstSnapIsVirtual || dateStr !== firstSnap.date) { const inc = incrementsByDate[dateStr]; if (inc) { orderedStages.forEach(stageKey => { cumulative[stageKey] += inc[stageKey] || 0; }); } }
+                    tableSeries.push({ date: dateStr, perStage: { ...cumulative }, total: 0 });
+                });
+            }
+        }
 
         async function timedFetch(url, options = {}, label = 'fetch') {
             const start = performance.now();
@@ -4591,6 +4752,7 @@
         async function loadLayout(dateStr, preserveState = false) {
             try {
                 if (HAS_ZONES && !selectedZone) return;
+                const renderToken = ++latestLayoutRenderToken;
                 currentDate = dateStr;
                 updateSelectedZoneBanner();
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
@@ -4604,10 +4766,11 @@
                 let data = layoutResponseCache.get(requestedLayoutKey);
                 if (!data) {
                     let pending = pendingLayoutRequests.get(requestedLayoutKey);
-                    if (!pending) { pending = (async () => { const response = await timedFetch(layoutUrl, { cache: 'no-store' }, 'layout-data'); return response.json(); })(); pendingLayoutRequests.set(requestedLayoutKey, pending); }
+                    if (!pending) { pending = (async () => { const response = await timedFetch(layoutUrl, {}, 'layout-data'); return response.json(); })(); pendingLayoutRequests.set(requestedLayoutKey, pending); }
                     try { data = await pending; } finally { pendingLayoutRequests.delete(requestedLayoutKey); }
                     if (!data.error) setLimitedCacheEntry(layoutResponseCache, requestedLayoutKey, data, 60);
                 }
+                if (renderToken !== latestLayoutRenderToken) return;
                 if (data.error) { showError(data.error); return; }
                 layoutData = data;
                 discoveredMissingTrackers.clear();
@@ -4625,14 +4788,16 @@
                     let blob = layoutImageBlobCache.get(baseImageUrl);
                     if (!blob) {
                         let pendingImageFetch = pendingLayoutImageRequests.get(baseImageUrl);
-                        if (!pendingImageFetch) { pendingImageFetch = (async () => { const imageResponse = await timedFetch(baseImageUrl, { cache: 'no-store' }, 'layout-image'); if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`); return imageResponse.blob(); })(); pendingLayoutImageRequests.set(baseImageUrl, pendingImageFetch); }
+                        if (!pendingImageFetch) { pendingImageFetch = (async () => { const imageResponse = await timedFetch(baseImageUrl, {}, 'layout-image'); if (!imageResponse.ok) throw new Error(`HTTP ${imageResponse.status}: ${imageResponse.statusText}`); return imageResponse.blob(); })(); pendingLayoutImageRequests.set(baseImageUrl, pendingImageFetch); }
                         try { blob = await pendingImageFetch; } finally { pendingLayoutImageRequests.delete(baseImageUrl); }
                         setLimitedCacheEntry(layoutImageBlobCache, baseImageUrl, blob, 20);
                     }
+                    if (renderToken !== latestLayoutRenderToken) return;
                     const imageUrl = URL.createObjectURL(blob);
                     const img = new Image();
                     img.src = imageUrl;
                     img.onload = () => {
+                        if (renderToken !== latestLayoutRenderToken) { URL.revokeObjectURL(imageUrl); return; }
                         image = img; URL.revokeObjectURL(imageUrl);
                         if (preserveState && canvas && canvasWrapper && ctx) {
                             const container = document.getElementById('layoutContainer');
