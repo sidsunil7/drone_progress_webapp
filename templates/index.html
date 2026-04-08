@@ -4342,6 +4342,12 @@
                 }
             } finally {
                 summaryBuildActiveCount = Math.max(0, summaryBuildActiveCount - 1);
+                if (summaryBuildActiveCount === 0 && HAS_ZONES && isZonePickerActive) {
+                    const activeDateId = lastZonePickerDateId || currentDate || getLatestDateId(availableDates);
+                    if (activeDateId) {
+                        renderSiteStageKpiStrip(activeDateId, siteKpiStageCounts || siteStageCounts);
+                    }
+                }
             }
         }
 
