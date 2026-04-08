@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Construction Progress Viewer</title>
+    <link rel="icon" type="image/png" href="{{ url_for('static', filename='images/logo-icon-gapped.png') }}">
     <style>
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -124,6 +125,17 @@
             color: #fff;
             flex-shrink: 0;
             letter-spacing: -0.01em;
+        }
+        #topbar .app-logo-wrap {
+            display: inline-flex;
+            align-items: center;
+            padding: 0 10px;
+            height: 100%;
+        }
+        #topbar .app-logo {
+            height: 34px;
+            width: auto;
+            display: block;
         }
         #subbar {
             position: absolute;
@@ -1271,7 +1283,9 @@
 
     <!-- TOP BAR -->
     <div id="topbar">
-        <span class="app-title">Construction Progress Viewer</span>
+        <div class="app-logo-wrap">
+            <img class="app-logo" src="{{ url_for('static', filename='images/logo-with-text-gapped-light.png') }}" alt="Construction AI logo">
+        </div>
     </div>
     <div id="subbar">
         <div class="subbar-left">
