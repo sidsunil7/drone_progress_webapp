@@ -2541,6 +2541,7 @@
         const pendingZoneMapRequests = new Map();
         let latestSummaryRequestKey = null;
         let latestSummaryPrefetchToken = null;
+        let summaryBuildActiveCount = 0;
         let lastZonePickerDateId = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
@@ -3013,10 +3014,10 @@
                 const rateText = componentRatePerDay == null
                     ? ''
                     : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
-                const showRateLoader = siteKpiDataLoading || !rateSeriesReady;
+                const showRateLoader = siteKpiDataLoading || summaryBuildActiveCount > 0 || !rateSeriesReady;
                 const rateMarkup = showRateLoader
                     ? `<span class="site-stage-kpi-stage-count">${getDatapointLoaderHtml()}</span>`
-                    : (rateText ? `<span class="site-stage-kpi-stage-count">${rateText}</span>` : '');
+                    : `<span class="site-stage-kpi-stage-count">${rateText || '-'}</span>`;
                 const trackersMarkup = siteKpiDataLoading
                     ? `${getDatapointLoaderHtml()} trackers`
                     : `<strong>${stageCount}</strong> trackers`;
@@ -4315,27 +4316,32 @@
         }
 
         async function computeAllDateSummaries(options = {}) {
-            const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 2);
-            const reset = options?.reset !== false;
-            const token = options?.token || `${Date.now()}`;
-            if (reset) allDateSummaries = {};
-            const dateIds = availableDates.map(d => d.date);
-            let index = 0;
-            const workers = Array.from({ length: Math.min(concurrency, dateIds.length || 1) }, async () => {
-                while (index < dateIds.length) {
-                    const curIndex = index++;
-                    const dateId = dateIds[curIndex];
-                    try {
-                        await ensureSummaryForDate(dateId);
-                    } catch (_) {}
-                    if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
+            summaryBuildActiveCount += 1;
+            try {
+                const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 2);
+                const reset = options?.reset !== false;
+                const token = options?.token || `${Date.now()}`;
+                if (reset) allDateSummaries = {};
+                const dateIds = availableDates.map(d => d.date);
+                let index = 0;
+                const workers = Array.from({ length: Math.min(concurrency, dateIds.length || 1) }, async () => {
+                    while (index < dateIds.length) {
+                        const curIndex = index++;
+                        const dateId = dateIds[curIndex];
+                        try {
+                            await ensureSummaryForDate(dateId);
+                        } catch (_) {}
+                        if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
+                    }
+                });
+                await Promise.allSettled(workers);
+                if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
+                rebuildSummaryDerivedTables();
+                if (HAS_ZONES && isZonePickerActive && lastZonePickerDateId) {
+                    renderSiteOverviewTable(lastZonePickerDateId);
                 }
-            });
-            await Promise.allSettled(workers);
-            if (latestSummaryPrefetchToken && token !== latestSummaryPrefetchToken) return;
-            rebuildSummaryDerivedTables();
-            if (HAS_ZONES && isZonePickerActive && lastZonePickerDateId) {
-                renderSiteOverviewTable(lastZonePickerDateId);
+            } finally {
+                summaryBuildActiveCount = Math.max(0, summaryBuildActiveCount - 1);
             }
         }
 
