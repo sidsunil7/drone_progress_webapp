@@ -4278,14 +4278,18 @@
                 seriesDataByStatus.completed.push(normalizedCompleted);
             });
 
-            const series = statusDefinitions.map(status => ({
+            const stackOrder = ['completed', 'in_progress', 'not_started'];
+            const series = stackOrder.map(statusKey => {
+                const status = statusDefinitions.find(s => s.key === statusKey) || { key: statusKey, label: formatStatusLabel(statusKey) };
+                return {
                 name: status.label,
                 type: 'bar',
                 stack: stageDef.label,
                 emphasis: { focus: 'series' },
                 itemStyle: { color: getProgressStatusColor(status.key) },
                 data: seriesDataByStatus[status.key] || []
-            }));
+                };
+            });
             window.progressChartInstance.setOption({
                 title: { text: `Progress for ${stageDef.label}`, left: 'center', textStyle: { fontSize: 12 } },
                 tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
