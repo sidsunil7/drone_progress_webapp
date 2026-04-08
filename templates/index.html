@@ -4098,6 +4098,9 @@
             updateSelectedZoneBanner();
             currentDate = null;
             availableDates = zoneMapDates;
+            // Invalidate zone-specific rate series so site KPIs don't reuse stale rates
+            // while site-level summaries are being rebuilt.
+            workingDaySeries = [];
             layoutData = null;
             selectedTrackerId = null;
             resetTrackerPreview();
@@ -4120,6 +4123,7 @@
                     const restoredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
                         ? lastZonePickerDateId
                         : latestAvailableDateId;
+                    lastZonePickerDateId = restoredZoneDateId;
                     const restoredZoneDateIndex = Math.max(0, availableDates.findIndex(d => d.date === restoredZoneDateId));
                     slider.max = availableDates.length - 1;
                     slider.value = restoredZoneDateIndex;
@@ -4142,7 +4146,11 @@
             if (filterSection) filterSection.style.display = 'block';
             renderStageFilters();
             renderStatusFilters();
-            if (availableDates.length > 0) renderSiteOverviewTable(lastZonePickerDateId || getLatestDateId(availableDates) || availableDates[availableDates.length - 1].date);
+            if (availableDates.length > 0) {
+                const activeZoneDateId = lastZonePickerDateId || getLatestDateId(availableDates) || availableDates[availableDates.length - 1].date;
+                showDateChangeLoadingState(activeZoneDateId);
+                renderSiteOverviewTable(activeZoneDateId);
+            }
             _closePanel();
 
             (async () => {
