@@ -50,6 +50,22 @@
             inset: 0;
             overflow: hidden;
         }
+        #mapArea.startup-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 24px;
+            height: 24px;
+            margin-left: -12px;
+            margin-top: -12px;
+            border: 3px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 20;
+            pointer-events: none;
+        }
 
         /* ── zone picker (zone-level projects) ── */
         #zonePicker {
@@ -58,6 +74,22 @@
             display: none;
             z-index: 2;
             overflow: hidden;
+        }
+        #zonePicker.component-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 22px;
+            height: 22px;
+            margin-left: -11px;
+            margin-top: -11px;
+            border: 3px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 8;
+            pointer-events: none;
         }
         #zonePicker.dragging #blockMapCanvas { cursor: grabbing; }
         #blockMapCanvas {
@@ -94,22 +126,6 @@
             border-top-color: #014059;
             border-radius: 999px;
             animation: spin 0.8s linear infinite;
-            z-index: 8;
-            pointer-events: none;
-        }
-        #layoutWrapper.component-loading::after {
-            content: 'Loading...';
-            position: absolute;
-            top: calc(50% + 18px);
-            left: 50%;
-            transform: translateX(-50%);
-            color: #1f2937;
-            font-size: 12px;
-            font-weight: 600;
-            background: rgba(255, 255, 255, 0.92);
-            border: 1px solid #d5dde8;
-            border-radius: 999px;
-            padding: 3px 10px;
             z-index: 8;
             pointer-events: none;
         }
@@ -381,10 +397,23 @@
 
         /* ── LOADING / ERROR ── */
         .loading {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
             color: #666; font-size: 14px;
             background: rgba(255,255,255,0.88);
             padding: 20px 28px; border-radius: 8px;
             box-shadow: 0 2px 12px rgba(0,0,0,0.12);
+        }
+        .loading::before {
+            content: '';
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            flex: 0 0 auto;
         }
         .loading::after {
             content: '...';
@@ -468,19 +497,6 @@
         }
         #siteOverviewTable .component-loader {
             margin: 2px 0 6px;
-        }
-        #site-stage-kpi-strip.component-loading-inline::after {
-            content: '';
-            position: absolute;
-            top: 12px;
-            right: 14px;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(37, 99, 235, 0.22);
-            border-top-color: #2563eb;
-            border-radius: 999px;
-            animation: spin 0.8s linear infinite;
-            z-index: 3;
         }
         @keyframes spin {
             from { transform: rotate(0deg); }
@@ -1380,7 +1396,7 @@
     <!-- ══════════════════════════════════
          MAP LAYER — full canvas
     ══════════════════════════════════ -->
-    <div id="mapArea">
+    <div id="mapArea" class="startup-loading">
         <!-- Zone picker map (HAS_ZONES mode) -->
         <div id="zonePicker">
             <canvas id="blockMapCanvas"></canvas>
@@ -2520,6 +2536,7 @@
         const pendingSiteOverviewRequests = new Map();
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
+        let latestZoneMapSpinnerRequest = 0;
         let latestSiteOverviewDateRequest = null;
         const pendingZoneMapRequests = new Map();
         let latestSummaryRequestKey = null;
@@ -2897,6 +2914,30 @@
             document.addEventListener('touchend', stopDrag);
             siteKpiDragWired = true;
         }
+        function getDatapointLoaderHtml() {
+            return `<span class="datapoint-loader-wrap" role="status" aria-label="Loading…"><span class="datapoint-loader" aria-hidden="true"></span></span>`;
+        }
+        function hasCachedDateKpiData(dateId) {
+            if (!dateId) return false;
+            const candidates = [dateId, normalizeIsoDate(dateId)].filter(Boolean);
+            for (const key of candidates) {
+                const cached = dateDataCache.get(key);
+                const overview = cached?.siteOverview || siteOverviewCache.get(key);
+                const summary = cached?.summary || allDateSummaries[getDateDisplayForId(key)];
+                if (overview && !overview.error && summary) return true;
+            }
+            return false;
+        }
+        function showDateChangeLoadingState(dateId, message = 'Loading overview...') {
+            if (hasCachedDateKpiData(dateId)) {
+                siteKpiDataLoading = false;
+                return;
+            }
+            siteKpiDataLoading = true;
+            renderSiteStageKpiStrip(dateId, siteKpiStageCounts || siteStageCounts);
+            const container = document.getElementById('siteOverviewTable');
+            if (container) container.innerHTML = getInlineLoaderHtml(message);
+        }
 
         function renderSiteStageKpiStrip(dateId, stageCountsInput = null) {
             const kpiStrip = document.getElementById('site-stage-kpi-strip');
@@ -2971,11 +3012,15 @@
                 const rateText = componentRatePerDay == null
                     ? ''
                     : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
-                const rateMarkup = rateText
-                    ? `<span class="site-stage-kpi-stage-count">${rateText}</span>`
-                    : (siteKpiDataLoading
-                        ? `<span class="site-stage-kpi-stage-count datapoint-loader-wrap" role="status" aria-label="Loading…"><span class="datapoint-loader" aria-hidden="true"></span></span>`
-                        : '');
+                const rateMarkup = siteKpiDataLoading
+                    ? `<span class="site-stage-kpi-stage-count">${getDatapointLoaderHtml()}</span>`
+                    : (rateText ? `<span class="site-stage-kpi-stage-count">${rateText}</span>` : '');
+                const trackersMarkup = siteKpiDataLoading
+                    ? `${getDatapointLoaderHtml()} trackers`
+                    : `<strong>${stageCount}</strong> trackers`;
+                const completeMarkup = siteKpiDataLoading
+                    ? `${getDatapointLoaderHtml()} complete`
+                    : `<strong>${formatNumericValue(pctComplete, 1)}%</strong> complete`;
                 const stageSegments = statusDefinitions.map(status => {
                     const count = stageStatusTotals[status.key] || 0;
                     const pct = stagePercentDenominator > 0 ? ((count / stagePercentDenominator) * 100) : 0;
@@ -2995,8 +3040,8 @@
                     <div class="site-stage-kpi-body">
                         <div class="site-stage-kpi-progress-track">${stageSegments}</div>
                         <div class="site-stage-kpi-foot">
-                            <span class="site-stage-kpi-foot-item"><strong>${stageCount}</strong> trackers</span>
-                            <span class="site-stage-kpi-foot-item"><strong>${formatNumericValue(pctComplete, 1)}%</strong> complete</span>
+                            <span class="site-stage-kpi-foot-item">${trackersMarkup}</span>
+                            <span class="site-stage-kpi-foot-item">${completeMarkup}</span>
                         </div>
                     </div>
                 </div>`;
@@ -3220,6 +3265,8 @@
         
         async function init() {
             try {
+                // Show spinner before any startup API call begins.
+                setLayoutComponentLoading(true);
                 setupViewTabs();
                 setupZoomControls();
                 await initZoneVideoIcon();
@@ -3284,10 +3331,15 @@
                     }
                 })();
             } catch (error) { showError(`Error initializing: ${error.message}`); }
+            finally {
+                setLayoutComponentLoading(false);
+                setStartupLoading(false);
+            }
         }
 
         async function initZoneProject() {
             try {
+                setLayoutComponentLoading(true);
                 const zonePicker = document.getElementById('zonePicker');
                 const layoutWrapper = document.getElementById('layoutWrapper');
                 const timelineContainer = document.getElementById('timelineContainer');
@@ -3415,6 +3467,7 @@
                             const selectedDate = availableDates[index];
                             updateTimelineCurrent(index);
                             updateSelectedZoneBanner(selectedDate.date);
+                            showDateChangeLoadingState(selectedDate.date);
                             renderZonePickerDateFromCache(selectedDate.date);
                             scheduleZoneMapUpdate(selectedDate.date);
                             syncTimelineUI(index, availableDates);
@@ -3425,11 +3478,12 @@
                             const selectedDate = availableDates[index];
                             updateTimelineCurrent(index);
                             updateSelectedZoneBanner(selectedDate.date);
+                            showDateChangeLoadingState(selectedDate.date);
                             updateZoneMapForDate(selectedDate.date);
                             syncTimelineUI(index, availableDates);
                         };
                         renderTimelineDots();
-                        updateZoneMapForDate(lastZonePickerDateId);
+                        await updateZoneMapForDate(lastZonePickerDateId);
                         scheduleDateBundlePrefetch(getDatePrefetchWindow(lastZonePickerDateId, 1), lastZonePickerDateId, 1);
                     }
                 } else if (timelineContainer) {
@@ -3448,6 +3502,7 @@
                     } catch (err) { console.error('Site-level summary build failed:', err); }
                 })();
             } catch (error) { showError(`Error loading zones: ${error.message}`); }
+            finally { setLayoutComponentLoading(false); }
         }
 
         function _getZoneCanvasDrawPoint(event) {
@@ -3999,6 +4054,7 @@
                     const selectedDate = availableDates[index];
                     updateTimelineCurrent(index);
                     updateSelectedZoneBanner(selectedDate.date);
+                    showDateChangeLoadingState(selectedDate.date);
                     renderZonePickerDateFromCache(selectedDate.date);
                     scheduleLayoutLoad(selectedDate.date, true);
                     syncTimelineUI(index, availableDates);
@@ -4008,6 +4064,7 @@
                     const selectedDate = availableDates[index];
                     updateTimelineCurrent(index);
                     updateSelectedZoneBanner(selectedDate.date);
+                    showDateChangeLoadingState(selectedDate.date);
                     loadLayout(selectedDate.date, true);
                     syncTimelineUI(index, availableDates);
                 };
@@ -4067,8 +4124,8 @@
                     document.getElementById('timelineEnd').textContent = availableDates[availableDates.length - 1].display;
                     updateTimelineCurrent(restoredZoneDateIndex);
                     syncTimelineUI(restoredZoneDateIndex, availableDates);
-                    slider.oninput = (e) => { const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); renderZonePickerDateFromCache(selectedDate.date); scheduleZoneMapUpdate(selectedDate.date); syncTimelineUI(index, availableDates); };
-                    slider.onchange = (e) => { if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; } const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); updateZoneMapForDate(selectedDate.date); syncTimelineUI(index, availableDates); };
+                    slider.oninput = (e) => { const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); showDateChangeLoadingState(selectedDate.date); renderZonePickerDateFromCache(selectedDate.date); scheduleZoneMapUpdate(selectedDate.date); syncTimelineUI(index, availableDates); };
+                    slider.onchange = (e) => { if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; } const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); showDateChangeLoadingState(selectedDate.date); updateZoneMapForDate(selectedDate.date); syncTimelineUI(index, availableDates); };
                     renderTimelineDots();
                     updateZoneMapForDate(restoredZoneDateId);
                 }
@@ -4102,28 +4159,42 @@
             if (typeof closeZoneVideoModal === 'function') closeZoneVideoModal();
             latestZoneMapDateRequest = dateId;
             lastZonePickerDateId = dateId;
-            renderZonePickerDateFromCache(dateId);
-            try { await fetchDateBundle(dateId, { includeVideos: true }); } catch (_) {}
-            if (latestZoneMapDateRequest !== dateId) return;
-            const cacheKey = `${dateId}`;
-            let data = zoneMapDataCache.get(cacheKey);
-            if (!data) {
-                let pending = pendingZoneMapRequests.get(cacheKey);
-                if (!pending) {
-                    pending = (async () => { const url = `/api/zones?date=${encodeURIComponent(dateId)}`; const resp = await timedFetch(url, {}, 'zones-by-date'); return resp.json(); })();
-                    pendingZoneMapRequests.set(cacheKey, pending);
+            const hasCachedZoneMap = renderZonePickerDateFromCache(dateId);
+            let spinnerRequest = null;
+            if (!hasCachedZoneMap) {
+                spinnerRequest = ++latestZoneMapSpinnerRequest;
+                setLayoutComponentLoading(true);
+            } else {
+                latestZoneMapSpinnerRequest++;
+                setLayoutComponentLoading(false);
+            }
+            try {
+                try { await fetchDateBundle(dateId, { includeVideos: true }); } catch (_) {}
+                if (latestZoneMapDateRequest !== dateId) return;
+                const cacheKey = `${dateId}`;
+                let data = zoneMapDataCache.get(cacheKey);
+                if (!data) {
+                    let pending = pendingZoneMapRequests.get(cacheKey);
+                    if (!pending) {
+                        pending = (async () => { const url = `/api/zones?date=${encodeURIComponent(dateId)}`; const resp = await timedFetch(url, {}, 'zones-by-date'); return resp.json(); })();
+                        pendingZoneMapRequests.set(cacheKey, pending);
+                    }
+                    try { data = await pending; } finally { pendingZoneMapRequests.delete(cacheKey); }
+                    if (!data.error) setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
                 }
-                try { data = await pending; } finally { pendingZoneMapRequests.delete(cacheKey); }
-                if (!data.error) setLimitedCacheEntry(zoneMapDataCache, cacheKey, data, 120);
+                if (latestZoneMapDateRequest !== dateId) return;
+                if (!data.error) {
+                    zoneMeta = data;
+                    drawBlockMapCanvas(data);
+                    const existing = dateDataCache.get(dateId) || {};
+                    dateDataCache.set(dateId, { ...existing, zonesData: data });
+                }
+                await renderSiteOverviewTable(dateId);
+            } finally {
+                if (spinnerRequest !== null && spinnerRequest === latestZoneMapSpinnerRequest) {
+                    setLayoutComponentLoading(false);
+                }
             }
-            if (latestZoneMapDateRequest !== dateId) return;
-            if (!data.error) {
-                zoneMeta = data;
-                drawBlockMapCanvas(data);
-                const existing = dateDataCache.get(dateId) || {};
-                dateDataCache.set(dateId, { ...existing, zonesData: data });
-            }
-            await renderSiteOverviewTable(dateId);
         }
 
         function renderSiteOverviewTableFromData(dateId, data) {
@@ -4173,7 +4244,6 @@
             if (needsNetwork) {
                 siteKpiDataLoading = true;
                 container.innerHTML = getInlineLoaderHtml('Loading overview...');
-                setKpiStripLoading(true);
                 if (siteKpiStageCounts && Object.keys(siteKpiStageCounts).length) {
                     renderSiteStageKpiStrip(dateId, siteKpiStageCounts || siteStageCounts);
                 }
@@ -4198,13 +4268,11 @@
             if (latestSiteOverviewDateRequest !== dateId) return;
             if (!data) {
                 siteKpiDataLoading = false;
-                setKpiStripLoading(false);
                 container.innerHTML = '<div class="filter-summary-text">Loading site overview…</div>';
                 return;
             }
             renderSiteOverviewTableFromData(dateId, data);
             siteKpiDataLoading = false;
-            setKpiStripLoading(false);
         }
 
         function returnToProjectSelection() { window.location.href = '/'; }
@@ -4854,13 +4922,14 @@
         }
         function setLayoutComponentLoading(isLoading) {
             const wrapper = document.getElementById('layoutWrapper');
-            if (!wrapper) return;
-            wrapper.classList.toggle('component-loading', Boolean(isLoading));
+            const zonePicker = document.getElementById('zonePicker');
+            if (wrapper) wrapper.classList.toggle('component-loading', Boolean(isLoading));
+            if (zonePicker) zonePicker.classList.toggle('component-loading', Boolean(isLoading));
         }
-        function setKpiStripLoading(isLoading) {
-            const strip = document.getElementById('site-stage-kpi-strip');
-            if (!strip) return;
-            strip.classList.toggle('component-loading-inline', Boolean(isLoading));
+        function setStartupLoading(isLoading) {
+            const mapArea = document.getElementById('mapArea');
+            if (!mapArea) return;
+            mapArea.classList.toggle('startup-loading', Boolean(isLoading));
         }
         async function ensureSummaryForDate(dateId) {
             const display = getDateDisplayForId(dateId);
@@ -4979,7 +5048,7 @@
         }
         
         async function loadLayout(dateStr, preserveState = false) {
-            setLayoutComponentLoading(true);
+            let showOverlaySpinner = false;
             try {
                 if (HAS_ZONES && !selectedZone) return;
                 const renderToken = ++latestLayoutRenderToken;
@@ -4987,6 +5056,8 @@
                 updateSelectedZoneBanner();
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
                 if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) return;
+                showOverlaySpinner = Boolean(preserveState && lastLoadedLayoutKey !== requestedLayoutKey);
+                setLayoutComponentLoading(showOverlaySpinner);
                 if (availableDates.length > 1) {
                     const dateIndex = availableDates.findIndex(d => d.date === dateStr);
                     if (dateIndex >= 0) { document.getElementById('timelineSlider').value = dateIndex; updateTimelineCurrent(dateIndex); syncTimelineUI(dateIndex, availableDates); }
@@ -5052,7 +5123,7 @@
                     img.onerror = () => { URL.revokeObjectURL(imageUrl); const sizeMB = (blob.size / (1024*1024)).toFixed(2); if (blob.size > 100*1024*1024) showError(`Image is too large (${sizeMB} MB) for browser to load.`); else showError(`Error loading layout image. Size: ${sizeMB} MB`); };
                 } catch (error) { showError(`Error fetching layout image: ${error.message}`); }
             } catch (error) { showError(`Error loading layout: ${error.message}`); }
-            finally { setLayoutComponentLoading(false); }
+            finally { if (showOverlaySpinner) setLayoutComponentLoading(false); }
         }
         
         function setupCanvas(img) {
@@ -5437,7 +5508,9 @@
         
         function handleOverlayToggle() { drawOverlays(); }
         
-        window.addEventListener('load', () => { init(); });
+        // Start app bootstrap as soon as DOM is ready (not waiting for all assets),
+        // so loading indicators appear before startup API fetches begin.
+        window.addEventListener('DOMContentLoaded', () => { init(); });
         
         window.addEventListener('resize', () => {
             if (image && canvas) {
