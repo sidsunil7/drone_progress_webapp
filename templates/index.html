@@ -3149,7 +3149,7 @@
                 const summaryToken = latestSummaryPrefetchToken;
                 (async () => {
                     try {
-                        await computeAllDateSummaries({ concurrency: 4, token: summaryToken, reset: true });
+                        await computeAllDateSummaries({ concurrency: 1, token: summaryToken, reset: true });
                         await refreshAnalyticsViewsAfterSummaryLoad(summaryToken);
                     } catch (error) {
                         console.error('Background summary build failed:', error);
@@ -3302,7 +3302,7 @@
                         };
                         renderTimelineDots();
                         updateZoneMapForDate(lastZonePickerDateId);
-                        scheduleDateBundlePrefetch(availableDates.map(d => d.date), lastZonePickerDateId, 3);
+                        scheduleDateBundlePrefetch(getDatePrefetchWindow(lastZonePickerDateId, 1), lastZonePickerDateId, 1);
                     }
                 } else if (timelineContainer) {
                     timelineContainer.style.display = 'none';
@@ -3312,7 +3312,7 @@
                     try {
                         latestSummaryPrefetchToken = `zone-picker|${Date.now()}`;
                         const summaryToken = latestSummaryPrefetchToken;
-                        await computeAllDateSummaries({ concurrency: 4, token: summaryToken, reset: true });
+                        await computeAllDateSummaries({ concurrency: 1, token: summaryToken, reset: true });
                         await refreshAnalyticsViewsAfterSummaryLoad(summaryToken);
                         /* Rates are now available — re-render KPI strip with real daily rates */
                         siteKpiLoaded = false;
@@ -3890,12 +3890,12 @@
 
             currentDate = preferredZoneDateId;
             await loadLayout(currentDate);
-            scheduleDateBundlePrefetch(availableDates.map(d => d.date), currentDate, 3);
+            scheduleDateBundlePrefetch(getDatePrefetchWindow(currentDate, 1), currentDate, 1);
 
             (async () => {
                 try {
                     latestSummaryPrefetchToken = `zone-select|${zone}|${Date.now()}`;
-                    await computeAllDateSummaries({ concurrency: 4, token: latestSummaryPrefetchToken, reset: true });
+                    await computeAllDateSummaries({ concurrency: 1, token: latestSummaryPrefetchToken, reset: true });
                     if (latestSummaryRequestKey !== summaryRequestKey || selectedZone !== zone) return;
                     await refreshAnalyticsViewsAfterSummaryLoad(latestSummaryPrefetchToken);
                 } catch (error) {
@@ -3960,7 +3960,7 @@
             (async () => {
                 try {
                     latestSummaryPrefetchToken = `zone-return|${Date.now()}`;
-                    await computeAllDateSummaries({ concurrency: 4, token: latestSummaryPrefetchToken, reset: true });
+                    await computeAllDateSummaries({ concurrency: 1, token: latestSummaryPrefetchToken, reset: true });
                     await refreshAnalyticsViewsAfterSummaryLoad(latestSummaryPrefetchToken);
                 } catch (err) { console.error('Site-level summary refresh failed:', err); }
             })();
@@ -3975,7 +3975,7 @@
             latestZoneMapDateRequest = dateId;
             lastZonePickerDateId = dateId;
             renderZonePickerDateFromCache(dateId);
-            try { await fetchDateBundle(dateId); } catch (_) {}
+            try { await fetchDateBundle(dateId, { includeVideos: true }); } catch (_) {}
             if (latestZoneMapDateRequest !== dateId) return;
             const cacheKey = `${dateId}`;
             let data = zoneMapDataCache.get(cacheKey);
@@ -4104,7 +4104,7 @@
         }
 
         async function computeAllDateSummaries(options = {}) {
-            const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 4);
+            const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 2);
             const reset = options?.reset !== false;
             const token = options?.token || `${Date.now()}`;
             if (reset) allDateSummaries = {};
@@ -4540,8 +4540,9 @@
             if (HAS_ZONES) return `/api/site_date_summary/${dateStr}?project=${encodeURIComponent(PROJECT)}`;
             return `/api/date_summary/${dateStr}`;
         }
-        function getDateBundleUrl(dateStr) {
-            return `/api/date_bundle?date=${encodeURIComponent(dateStr)}&project=${encodeURIComponent(PROJECT)}`;
+        function getDateBundleUrl(dateStr, includeVideos = false) {
+            const include = includeVideos ? '1' : '0';
+            return `/api/date_bundle?date=${encodeURIComponent(dateStr)}&project=${encodeURIComponent(PROJECT)}&include_videos=${include}`;
         }
         function getDateDisplayForId(dateId) {
             return availableDates.find(d => d.date === dateId)?.display || dateId;
@@ -4575,12 +4576,15 @@
         function cacheDateBundlePayload(dateId, payload) {
             if (!dateId || !payload || payload.error) return null;
             const existing = dateDataCache.get(dateId) || {};
+            const zoneRows = Array.isArray(payload.zones_data?.zones) ? payload.zones_data.zones : [];
+            const hasVideos = zoneRows.some(z => Array.isArray(z?.video_clips) ? z.video_clips.length > 0 : Boolean(z?.has_video));
             const merged = {
                 ...existing,
                 zonesData: payload.zones_data || existing.zonesData || null,
                 siteOverview: payload.site_overview || existing.siteOverview || null,
                 summary: normalizeSummaryForUi(payload.summary) || existing.summary || null,
                 bundleLoaded: true,
+                bundleHasVideos: Boolean(existing.bundleHasVideos || hasVideos),
             };
             dateDataCache.set(dateId, merged);
             if (merged.zonesData) setLimitedCacheEntry(zoneMapDataCache, `${dateId}`, merged.zonesData, 120);
@@ -4591,26 +4595,30 @@
             }
             return merged;
         }
-        async function fetchDateBundle(dateId) {
+        async function fetchDateBundle(dateId, options = {}) {
             if (!dateId) return null;
             const cached = dateDataCache.get(dateId);
-            if (cached?.bundleLoaded) return cached;
-            let pending = pendingDateBundleRequests.get(dateId);
+            const includeVideos = Boolean(options?.includeVideos);
+            if (cached?.bundleLoaded && (!includeVideos || cached?.bundleHasVideos)) return cached;
+            const pendingKey = `${dateId}|${includeVideos ? '1' : '0'}`;
+            let pending = pendingDateBundleRequests.get(pendingKey);
             if (!pending) {
                 pending = (async () => {
-                    const resp = await timedFetch(getDateBundleUrl(dateId), {}, `date-bundle-${dateId}`);
+                    const resp = await timedFetch(getDateBundleUrl(dateId, includeVideos), {}, `date-bundle-${dateId}`);
                     return resp.json();
                 })();
-                pendingDateBundleRequests.set(dateId, pending);
+                pendingDateBundleRequests.set(pendingKey, pending);
             }
             let payload = null;
             try {
                 payload = await pending;
             } finally {
-                pendingDateBundleRequests.delete(dateId);
+                pendingDateBundleRequests.delete(pendingKey);
             }
             if (!payload || payload.error) return null;
-            return cacheDateBundlePayload(dateId, payload);
+            const result = cacheDateBundlePayload(dateId, payload);
+            if (result && includeVideos) result.bundleHasVideos = true;
+            return result;
         }
         function renderZonePickerDateFromCache(dateId) {
             const cached = dateDataCache.get(dateId) || {};
@@ -4626,7 +4634,7 @@
             }
             return Boolean(zonesData);
         }
-        function scheduleDateBundlePrefetch(dateIds, activeDateId = null, concurrency = 3) {
+        function scheduleDateBundlePrefetch(dateIds, activeDateId = null, concurrency = 1) {
             if (!Array.isArray(dateIds) || !dateIds.length) return;
             const ordered = [...new Set(dateIds)];
             if (activeDateId) {
@@ -4648,10 +4656,23 @@
                     const cur = ordered[idx++];
                     const cached = dateDataCache.get(cur);
                     if (cached?.bundleLoaded) continue;
-                    try { await fetchDateBundle(cur); } catch (_) {}
+                    try { await fetchDateBundle(cur, { includeVideos: false }); } catch (_) {}
                 }
             });
             Promise.allSettled(workers);
+        }
+        function getDatePrefetchWindow(activeDateId, radius = 1) {
+            if (!Array.isArray(availableDates) || !availableDates.length || !activeDateId) return [];
+            const idx = availableDates.findIndex(d => d.date === activeDateId);
+            if (idx < 0) return [];
+            const ids = [];
+            for (let offset = 1; offset <= radius; offset++) {
+                const left = idx - offset;
+                const right = idx + offset;
+                if (left >= 0) ids.push(availableDates[left].date);
+                if (right < availableDates.length) ids.push(availableDates[right].date);
+            }
+            return ids;
         }
         async function ensureSummaryForDate(dateId) {
             const display = getDateDisplayForId(dateId);
@@ -4660,6 +4681,15 @@
             if (cached?.summary) {
                 allDateSummaries[display] = cached.summary;
                 return cached.summary;
+            }
+            if (HAS_ZONES && !selectedZone) {
+                try {
+                    const bundled = await fetchDateBundle(dateId, { includeVideos: false });
+                    if (bundled?.summary) {
+                        allDateSummaries[display] = bundled.summary;
+                        return bundled.summary;
+                    }
+                } catch (_) {}
             }
             const resp = await timedFetch(getDateSummaryUrl(dateId), {}, `date-summary-${dateId}`);
             const summary = await resp.json();

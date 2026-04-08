@@ -1951,6 +1951,21 @@ def discover_zone_videos(project_layout_dir, date_str):
     return by_zone
 
 
+@lru_cache(maxsize=128)
+def discover_zone_videos_blob_cached(project, date_str):
+    return discover_zone_videos_blob(project, date_str)
+
+
+@lru_cache(maxsize=128)
+def discover_zone_videos_blob_mount_cached(project, date_str):
+    return discover_zone_videos_blob_mount(project, date_str)
+
+
+@lru_cache(maxsize=128)
+def discover_zone_videos_cached(project_layout_dir, date_str, dir_sig):
+    return discover_zone_videos(project_layout_dir, date_str)
+
+
 def _encode_rel_path_for_url(path_value):
     return "/".join(quote(part, safe="") for part in str(path_value or "").split("/") if part not in ("", "."))
 
@@ -3206,11 +3221,11 @@ def get_zones():
 
     if date_id:
         if is_blob_video_backend_enabled():
-            zone_video_map = discover_zone_videos_blob(project, date_id)
+            zone_video_map = discover_zone_videos_blob_cached(project, date_id)
         elif is_blob_video_mount_backend_enabled():
-            zone_video_map = discover_zone_videos_blob_mount(project, date_id)
+            zone_video_map = discover_zone_videos_blob_mount_cached(project, date_id)
         else:
-            zone_video_map = discover_zone_videos(project_layout_dir, date_id)
+            zone_video_map = discover_zone_videos_cached(project_layout_dir, date_id, dir_sig)
     else:
         zone_video_map = {}
     serialize_start = time.perf_counter()
@@ -3520,12 +3535,16 @@ def get_date_bundle():
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
-    if is_blob_video_backend_enabled():
-        zone_video_map = discover_zone_videos_blob(project, date_id)
-    elif is_blob_video_mount_backend_enabled():
-        zone_video_map = discover_zone_videos_blob_mount(project, date_id)
+    include_videos = (request.args.get("include_videos", "0").strip().lower() in ("1", "true", "yes", "on"))
+    if include_videos:
+        if is_blob_video_backend_enabled():
+            zone_video_map = discover_zone_videos_blob_cached(project, date_id)
+        elif is_blob_video_mount_backend_enabled():
+            zone_video_map = discover_zone_videos_blob_mount_cached(project, date_id)
+        else:
+            zone_video_map = discover_zone_videos_cached(project_layout_dir, date_id, dir_sig)
     else:
-        zone_video_map = discover_zone_videos(project_layout_dir, date_id)
+        zone_video_map = {}
 
     rows = []
     stage_counts = {}
