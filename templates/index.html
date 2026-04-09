@@ -2823,12 +2823,16 @@
             return kpiRateCache.get(key) || null;
         }
         function hasKpiRateForDate(dateId) {
+            if (HAS_ZONES && isZonePickerActive && !selectedZone) {
+                return Boolean(getKpiRateEntryForDate(dateId));
+            }
             return Boolean(getKpiRateEntryForDate(dateId) || hasWorkingDayRateForDate(dateId));
         }
         function getKpiTrackerRatePerDay(stageKey, dateId) {
             const cached = getKpiRateEntryForDate(dateId);
             const cachedRate = cached?.perStage?.[stageKey];
             if (cachedRate !== null && cachedRate !== undefined && !Number.isNaN(cachedRate)) return cachedRate;
+            if (HAS_ZONES && isZonePickerActive && !selectedZone) return null;
             return getCurrentWorkingDayStageRate(stageKey, dateId);
         }
         function getActiveKpiDateId(dateId = null) {
@@ -4139,6 +4143,8 @@
         function returnToZonePicker() {
             const returnToken = ++latestZoneReturnRequestToken;
             selectedZone = null;
+            kpiRateCache.clear();
+            siteKpiRateLoadingDateId = null;
             updateSelectedZoneBanner();
             currentDate = null;
             availableDates = zoneMapDates;
@@ -5054,13 +5060,27 @@
             siteKpiRateLoadingDateId = resolvedDateId;
             renderSiteStageKpiStrip(resolvedDateId, siteKpiStageCounts || siteStageCounts);
             try {
+                if (options?.force) {
+                    try { await fetchDateBundle(resolvedDateId, { includeVideos: false }); } catch (_) {}
+                }
                 await ensureSummaryForDate(resolvedDateId);
                 const targetIndex = availableDates.findIndex(d => d.date === resolvedDateId);
                 let previousDateId = null;
                 if (targetIndex > 0) previousDateId = availableDates[targetIndex - 1]?.date || null;
-                if (previousDateId) await ensureSummaryForDate(previousDateId);
-                const currentSummary = allDateSummaries[getDateDisplayForId(resolvedDateId)];
-                const previousSummary = previousDateId ? allDateSummaries[getDateDisplayForId(previousDateId)] : null;
+                if (previousDateId) {
+                    if (options?.force) {
+                        try { await fetchDateBundle(previousDateId, { includeVideos: false }); } catch (_) {}
+                    }
+                    await ensureSummaryForDate(previousDateId);
+                }
+                const currentSummary = (options?.force
+                    ? normalizeSummaryForUi(dateDataCache.get(resolvedDateId)?.summary)
+                    : null) || allDateSummaries[getDateDisplayForId(resolvedDateId)];
+                const previousSummary = previousDateId
+                    ? ((options?.force
+                        ? normalizeSummaryForUi(dateDataCache.get(previousDateId)?.summary)
+                        : null) || allDateSummaries[getDateDisplayForId(previousDateId)])
+                    : null;
                 const currentCounts = getCumulativePerStageFromSummary(currentSummary);
                 const previousCounts = getCumulativePerStageFromSummary(previousSummary);
                 const workingDates = previousDateId
