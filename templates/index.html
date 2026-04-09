@@ -1052,38 +1052,6 @@
             flex-direction: column;
             overflow: hidden;
         }
-        .full-view-overlay.analytics-loading::before {
-            content: '';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            width: 24px;
-            height: 24px;
-            margin-left: -12px;
-            margin-top: -18px;
-            border: 3px solid rgba(1, 64, 89, 0.2);
-            border-top-color: #014059;
-            border-radius: 999px;
-            animation: spin 0.8s linear infinite;
-            z-index: 6;
-            pointer-events: none;
-        }
-        .full-view-overlay.analytics-loading::after {
-            content: attr(data-loading-label);
-            position: absolute;
-            top: calc(50% + 14px);
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 12px;
-            color: #334155;
-            background: rgba(255,255,255,0.95);
-            border: 1px solid #d6e0eb;
-            border-radius: 999px;
-            padding: 4px 10px;
-            z-index: 6;
-            pointer-events: none;
-            font-weight: 600;
-        }
         .full-view-overlay.active { display: flex; }
         .full-view-inner {
             flex: 1; overflow: auto;
@@ -1107,6 +1075,7 @@
             border-radius: 10px;
             box-shadow: 0 1px 6px rgba(0,0,0,0.06);
             padding: 14px;
+            position: relative;
         }
         .table-card + .table-card {
             position: relative;
@@ -1128,7 +1097,42 @@
         }
 
         .charts-scroll { flex: 1 0 auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; min-height: max-content; }
-        .chart-card { background: #fff; border-radius: 8px; border: 1px solid var(--bdr); padding: 12px; display: flex; flex-direction: column; gap: 6px; }
+        .chart-card { background: #fff; border-radius: 8px; border: 1px solid var(--bdr); padding: 12px; display: flex; flex-direction: column; gap: 6px; position: relative; }
+        .table-card.analytics-card-loading::before,
+        .chart-card.analytics-card-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            margin-left: -10px;
+            margin-top: -16px;
+            border: 3px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 3;
+            pointer-events: none;
+        }
+        .table-card.analytics-card-loading::after,
+        .chart-card.analytics-card-loading::after {
+            content: attr(data-card-loading-label);
+            position: absolute;
+            top: calc(50% + 10px);
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: #334155;
+            background: rgba(255,255,255,0.95);
+            border: 1px solid #d6e0eb;
+            border-radius: 999px;
+            padding: 3px 9px;
+            z-index: 3;
+            pointer-events: none;
+            font-weight: 600;
+            white-space: nowrap;
+        }
 
         .secondary-btn {
             padding: 5px 12px; border-radius: 5px;
@@ -1602,7 +1606,7 @@
     <div id="tableView" class="full-view-overlay" data-loading-label="Loading tables...">
         <div class="full-view-inner">
             <div class="tables-stack">
-                <section class="table-card">
+                <section class="table-card" data-card-loading-label="Loading daily table...">
                     <h2>Components Complete by Date</h2>
                     <p id="tableDescription">Each row shows how many trackers have each main construction stage fully completed on that date.</p>
                     <table id="dailyTable" class="data-table">
@@ -1614,7 +1618,7 @@
                     </table>
                 </section>
 
-                <section class="table-card">
+                <section class="table-card" data-card-loading-label="Loading rate table...">
                     <h2>Rate of Component Completion by Date</h2>
                     <p>Daily installed trackers per stage across interpolated working days between flights.</p>
                     <table id="rateTable" class="data-table">
@@ -1626,7 +1630,7 @@
                     </table>
                 </section>
 
-                <section class="table-card">
+                <section class="table-card" data-card-loading-label="Loading productivity table...">
                     <h2>Productivity by Date (MH/Tracker)</h2>
                     <p>Daily man-hours per tracker using the crew assigned to each stage and the interpolated daily install rate.</p>
                     <table id="productivityTable" class="data-table">
@@ -1638,7 +1642,7 @@
                     </table>
                 </section>
 
-                <section class="table-card">
+                <section class="table-card" data-card-loading-label="Loading stage dates...">
                     <p id="stageCompletionEstimates" style="display:none;margin-top:0"></p>
                     <table id="stageDatesTable" class="data-table" style="margin-top:8px">
                         <thead><tr>
@@ -1657,7 +1661,7 @@
     <div id="chartsView" class="full-view-overlay" data-loading-label="Loading charts...">
         <div class="full-view-inner" style="overflow-y:auto">
             <div class="charts-scroll">
-                <div class="chart-card">
+                <div class="chart-card" data-card-loading-label="Loading stage distribution...">
                     <h2>Stage Distribution (Pie Chart)</h2>
                     <p>Select a date to view how many trackers are in each stage on that day.</p>
                     <div>
@@ -1667,17 +1671,17 @@
                     </div>
                     <div id="dailyPieChart" style="width:100%;height:260px"></div>
                 </div>
-                <div class="chart-card">
+                <div class="chart-card" data-card-loading-label="Loading progress chart...">
                     <div id="progressStageSelector" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px"></div>
                     <div id="progressChart" style="min-height:220px"></div>
                 </div>
-                <div class="chart-card">
+                <div class="chart-card" data-card-loading-label="Loading manpower chart...">
                     <div id="manpowerChart" style="min-height:220px"></div>
                 </div>
-                <div class="chart-card">
+                <div class="chart-card" data-card-loading-label="Loading MH/MW chart...">
                     <div id="productivityMhMwChart" style="min-height:220px"></div>
                 </div>
-                <div class="chart-card">
+                <div class="chart-card" data-card-loading-label="Loading MH/mod chart...">
                     <div id="productivityMhModChart" style="min-height:220px"></div>
                 </div>
             </div>
@@ -1791,11 +1795,11 @@
     // We also provide a shim for the old sidebar reference.
     const _origSetupViewTabs_placeholder = true; // signal to skip original
         function setAnalyticsViewsLoading(isLoading, label = 'Loading analytics...') {
-            ['tableView', 'chartsView'].forEach((id) => {
-                const el = document.getElementById(id);
-                if (!el) return;
-                el.classList.toggle('analytics-loading', Boolean(isLoading));
-                el.setAttribute('data-loading-label', label);
+            document.querySelectorAll('#tableView .table-card, #chartsView .chart-card').forEach((card) => {
+                card.classList.toggle('analytics-card-loading', Boolean(isLoading));
+                if (!card.getAttribute('data-card-loading-label')) {
+                    card.setAttribute('data-card-loading-label', label);
+                }
             });
         }
 
@@ -1823,7 +1827,7 @@
                 } else {
                     timeline.classList.remove('visible');
                     if (overlayMap[view]) overlayMap[view].classList.add('active');
-                    if ((view === 'table' || view === 'charts') && summaryBuildActiveCount > 0) {
+                    if ((view === 'table' || view === 'charts') && (summaryBuildActiveCount > 0 || analyticsViewLoadingCount > 0)) {
                         setAnalyticsViewsLoading(true, view === 'charts' ? 'Loading charts...' : 'Loading tables...');
                     }
                     if (view === 'charts') {
