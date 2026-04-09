@@ -2534,6 +2534,8 @@
         const dateDataCache = new Map();
         const pendingDateBundleRequests = new Map();
         const pendingSiteOverviewRequests = new Map();
+        const siteSummaryCache = new Map();
+        const pendingSiteSummaryRequests = new Map();
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
         let latestZoneMapSpinnerRequest = 0;
@@ -4144,6 +4146,7 @@
             const returnToken = ++latestZoneReturnRequestToken;
             selectedZone = null;
             kpiRateCache.clear();
+            siteSummaryCache.clear();
             siteKpiRateLoadingDateId = null;
             updateSelectedZoneBanner();
             currentDate = null;
@@ -5034,6 +5037,32 @@
             const summary = await resp.json();
             return storeSummaryForDate(dateId, summary);
         }
+        async function fetchSiteSummaryForKpi(dateId, options = {}) {
+            const key = getKpiRateCacheKey(dateId);
+            if (!key) return null;
+            const force = Boolean(options?.force);
+            if (!force) {
+                const cached = siteSummaryCache.get(key);
+                if (cached) return cached;
+            }
+            let pending = pendingSiteSummaryRequests.get(key);
+            if (!pending || force) {
+                pending = (async () => {
+                    const resp = await timedFetch(`/api/site_date_summary/${encodeURIComponent(key)}`, {}, `site-date-summary-${key}`);
+                    return resp.json();
+                })();
+                pendingSiteSummaryRequests.set(key, pending);
+            }
+            let summary = null;
+            try {
+                summary = await pending;
+            } finally {
+                pendingSiteSummaryRequests.delete(key);
+            }
+            const normalized = normalizeSummaryForUi(summary);
+            if (normalized) siteSummaryCache.set(key, normalized);
+            return normalized;
+        }
         function getCumulativePerStageFromSummary(summary) {
             const cumulative = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
             if (!summary || !Array.isArray(summary.trackerStages)) return cumulative;
@@ -5060,26 +5089,12 @@
             siteKpiRateLoadingDateId = resolvedDateId;
             renderSiteStageKpiStrip(resolvedDateId, siteKpiStageCounts || siteStageCounts);
             try {
-                if (options?.force) {
-                    try { await fetchDateBundle(resolvedDateId, { includeVideos: false }); } catch (_) {}
-                }
-                await ensureSummaryForDate(resolvedDateId);
                 const targetIndex = availableDates.findIndex(d => d.date === resolvedDateId);
                 let previousDateId = null;
                 if (targetIndex > 0) previousDateId = availableDates[targetIndex - 1]?.date || null;
-                if (previousDateId) {
-                    if (options?.force) {
-                        try { await fetchDateBundle(previousDateId, { includeVideos: false }); } catch (_) {}
-                    }
-                    await ensureSummaryForDate(previousDateId);
-                }
-                const currentSummary = (options?.force
-                    ? normalizeSummaryForUi(dateDataCache.get(resolvedDateId)?.summary)
-                    : null) || allDateSummaries[getDateDisplayForId(resolvedDateId)];
+                const currentSummary = await fetchSiteSummaryForKpi(resolvedDateId, { force: options?.force });
                 const previousSummary = previousDateId
-                    ? ((options?.force
-                        ? normalizeSummaryForUi(dateDataCache.get(previousDateId)?.summary)
-                        : null) || allDateSummaries[getDateDisplayForId(previousDateId)])
+                    ? await fetchSiteSummaryForKpi(previousDateId, { force: options?.force })
                     : null;
                 const currentCounts = getCumulativePerStageFromSummary(currentSummary);
                 const previousCounts = getCumulativePerStageFromSummary(previousSummary);
