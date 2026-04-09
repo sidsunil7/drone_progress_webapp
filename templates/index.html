@@ -5101,6 +5101,9 @@
         async function fetchSiteSummaryForKpi(dateId, options = {}) {
             const key = getKpiRateCacheKey(dateId);
             if (!key) return null;
+            // Backend folder names are YYYYMMDD — always send in that format so
+            // the string comparison `d <= date_id` in the backend works correctly.
+            const apiDateStr = key.replace(/-/g, '');
             const force = Boolean(options?.force);
             if (!force) {
                 const cached = siteSummaryCache.get(key);
@@ -5109,7 +5112,7 @@
             let pending = pendingSiteSummaryRequests.get(key);
             if (!pending || force) {
                 pending = (async () => {
-                    const resp = await timedFetch(`/api/site_date_summary/${encodeURIComponent(key)}`, {}, `site-date-summary-${key}`);
+                    const resp = await timedFetch(`/api/site_date_summary/${encodeURIComponent(apiDateStr)}`, {}, `site-date-summary-${key}`);
                     return resp.json();
                 })();
                 pendingSiteSummaryRequests.set(key, pending);
@@ -5124,21 +5127,6 @@
             if (normalized) siteSummaryCache.set(key, normalized);
             return normalized;
         }
-        function getCumulativePerStageFromSummary(summary) {
-            const cumulative = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
-            if (!summary || !Array.isArray(summary.trackerStages)) return cumulative;
-            const orderedStages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
-            summary.trackerStages.forEach(ts => {
-                const idx = orderedStages.indexOf(ts.stage);
-                if (idx === -1) return;
-                if (ts.status === 'completed') {
-                    for (let i = 0; i <= idx; i++) cumulative[orderedStages[i]] += 1;
-                } else {
-                    for (let i = 0; i < idx; i++) cumulative[orderedStages[i]] += 1;
-                }
-            });
-            return cumulative;
-        }
         async function hydrateKpiRateForDate(dateId, options = {}) {
             const resolvedDateId = getKpiRateCacheKey(dateId);
             if (!resolvedDateId || !(HAS_ZONES && isZonePickerActive && !selectedZone)) return;
@@ -5150,26 +5138,33 @@
             siteKpiRateLoadingDateId = resolvedDateId;
             renderSiteStageKpiStrip(resolvedDateId, siteKpiStageCounts || siteStageCounts);
             try {
-                const targetIndex = availableDates.findIndex(d => d.date === resolvedDateId);
+                // Fetch site-level summaries for active + previous date using dedicated
+                // site endpoint so zone-context data can never contaminate the result.
+                // availableDates[i].date is YYYYMMDD, so normalise dateId for comparison.
+                const yyyymmdd = resolvedDateId.replace(/-/g, '');
+                const targetIndex = availableDates.findIndex(d => d.date === yyyymmdd || getKpiRateCacheKey(d.date) === resolvedDateId);
                 let previousDateId = null;
                 if (targetIndex > 0) previousDateId = availableDates[targetIndex - 1]?.date || null;
-                const currentSummary = await fetchSiteSummaryForKpi(resolvedDateId, { force: options?.force });
-                const previousSummary = previousDateId
-                    ? await fetchSiteSummaryForKpi(previousDateId, { force: options?.force })
-                    : null;
-                const currentCounts = getCumulativePerStageFromSummary(currentSummary);
-                const previousCounts = getCumulativePerStageFromSummary(previousSummary);
-                const workingDates = previousDateId
-                    ? buildWorkingCalendarDates(previousDateId, resolvedDateId).filter(d => d > previousDateId && d <= resolvedDateId)
-                    : [resolvedDateId];
-                const divisor = Math.max(1, workingDates.length);
-                const perStage = {
-                    pile: Math.max(0, (currentCounts.pile || 0) - (previousCounts.pile || 0)) / divisor,
-                    torque_tube: Math.max(0, (currentCounts.torque_tube || 0) - (previousCounts.torque_tube || 0)) / divisor,
-                    module_rails: Math.max(0, (currentCounts.module_rails || 0) - (previousCounts.module_rails || 0)) / divisor,
-                    solar_panel: Math.max(0, (currentCounts.solar_panel || 0) - (previousCounts.solar_panel || 0)) / divisor,
-                };
-                kpiRateCache.set(resolvedDateId, { perStage, source: 'active-date-hydration' });
+                const [currentSummary, previousSummary] = await Promise.all([
+                    fetchSiteSummaryForKpi(resolvedDateId, { force: options?.force }),
+                    previousDateId ? fetchSiteSummaryForKpi(previousDateId, { force: options?.force }) : Promise.resolve(null),
+                ]);
+                if (token !== latestKpiRateHydrationToken) return;
+                // Store fetched summaries into allDateSummaries so the proven
+                // rebuildSummaryDerivedTables / buildWorkingDaySeries path can
+                // compute the rate — this avoids custom delta math that could produce 0.
+                if (currentSummary) {
+                    const curDisplay = getDateDisplayForId(resolvedDateId);
+                    if (curDisplay) allDateSummaries[curDisplay] = currentSummary;
+                }
+                if (previousSummary && previousDateId) {
+                    const prevDisplay = getDateDisplayForId(previousDateId);
+                    if (prevDisplay) allDateSummaries[prevDisplay] = previousSummary;
+                }
+                if (token !== latestKpiRateHydrationToken) return;
+                // Use existing proven rate computation — fast for ≤2 dates in memory.
+                rebuildSummaryDerivedTables();
+                buildWorkingDaySeries();
             } catch (_) {
                 // Keep loader fallback behavior for true data misses.
             } finally {

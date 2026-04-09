@@ -3354,6 +3354,9 @@ def get_site_date_summary(date_str):
     Returns the same shape as /api/date_summary so the frontend charts/tables
     work without requiring a zone selection."""
     request_start = time.perf_counter()
+    # Normalise date to YYYYMMDD so string comparisons against folder names work
+    # regardless of whether the caller passes YYYY-MM-DD or YYYYMMDD.
+    date_str = date_str.replace('-', '')
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
     dir_sig = _get_dir_signature(project_layout_dir)
