@@ -1052,6 +1052,38 @@
             flex-direction: column;
             overflow: hidden;
         }
+        .full-view-overlay.analytics-loading::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 24px;
+            height: 24px;
+            margin-left: -12px;
+            margin-top: -18px;
+            border: 3px solid rgba(1, 64, 89, 0.2);
+            border-top-color: #014059;
+            border-radius: 999px;
+            animation: spin 0.8s linear infinite;
+            z-index: 6;
+            pointer-events: none;
+        }
+        .full-view-overlay.analytics-loading::after {
+            content: attr(data-loading-label);
+            position: absolute;
+            top: calc(50% + 14px);
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 12px;
+            color: #334155;
+            background: rgba(255,255,255,0.95);
+            border: 1px solid #d6e0eb;
+            border-radius: 999px;
+            padding: 4px 10px;
+            z-index: 6;
+            pointer-events: none;
+            font-weight: 600;
+        }
         .full-view-overlay.active { display: flex; }
         .full-view-inner {
             flex: 1; overflow: auto;
@@ -1567,7 +1599,7 @@
     </div>
 
     <!-- TABLE VIEW OVERLAY -->
-    <div id="tableView" class="full-view-overlay">
+    <div id="tableView" class="full-view-overlay" data-loading-label="Loading tables...">
         <div class="full-view-inner">
             <div class="tables-stack">
                 <section class="table-card">
@@ -1622,7 +1654,7 @@
     </div>
 
     <!-- CHARTS VIEW OVERLAY -->
-    <div id="chartsView" class="full-view-overlay">
+    <div id="chartsView" class="full-view-overlay" data-loading-label="Loading charts...">
         <div class="full-view-inner" style="overflow-y:auto">
             <div class="charts-scroll">
                 <div class="chart-card">
@@ -1758,6 +1790,14 @@
     // We override it here — called after window.load in the original init().
     // We also provide a shim for the old sidebar reference.
     const _origSetupViewTabs_placeholder = true; // signal to skip original
+        function setAnalyticsViewsLoading(isLoading, label = 'Loading analytics...') {
+            ['tableView', 'chartsView'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.classList.toggle('analytics-loading', Boolean(isLoading));
+                el.setAttribute('data-loading-label', label);
+            });
+        }
 
     function setupViewTabs() {
         const VIEWS = ['map','table','charts','settings'];
@@ -1783,6 +1823,9 @@
                 } else {
                     timeline.classList.remove('visible');
                     if (overlayMap[view]) overlayMap[view].classList.add('active');
+                    if ((view === 'table' || view === 'charts') && summaryBuildActiveCount > 0) {
+                        setAnalyticsViewsLoading(true, view === 'charts' ? 'Loading charts...' : 'Loading tables...');
+                    }
                     if (view === 'charts') {
                         requestAnimationFrame(() => refreshChartsView && refreshChartsView());
                     }
@@ -2545,6 +2588,7 @@
         let latestSummaryRequestKey = null;
         let latestSummaryPrefetchToken = null;
         let summaryBuildActiveCount = 0;
+        let analyticsViewLoadingCount = 0;
         const kpiRateCache = new Map();
         let siteKpiRateLoadingDateId = null;
         let latestKpiRateHydrationToken = 0;
@@ -3304,15 +3348,24 @@
         }
         async function refreshAnalyticsViewsAfterSummaryLoad(summaryToken = null) {
             if (summaryToken && latestSummaryPrefetchToken && summaryToken !== latestSummaryPrefetchToken) return;
-            initializeManpowerConfig();
-            buildWorkingDaySeries();
-            renderManpowerTable();
-            renderDailyTable();
-            renderRateTable();
-            renderProductivityTable();
-            updateStageCompletionEstimates();
-            initializeCharts();
-            initializeDailyPieChart();
+            analyticsViewLoadingCount += 1;
+            setAnalyticsViewsLoading(true, 'Loading charts and tables...');
+            try {
+                initializeManpowerConfig();
+                buildWorkingDaySeries();
+                renderManpowerTable();
+                renderDailyTable();
+                renderRateTable();
+                renderProductivityTable();
+                updateStageCompletionEstimates();
+                initializeCharts();
+                initializeDailyPieChart();
+            } finally {
+                analyticsViewLoadingCount = Math.max(0, analyticsViewLoadingCount - 1);
+                if (analyticsViewLoadingCount === 0 && summaryBuildActiveCount === 0) {
+                    setAnalyticsViewsLoading(false);
+                }
+            }
         }
         
         async function init() {
@@ -4383,6 +4436,7 @@
 
         async function computeAllDateSummaries(options = {}) {
             summaryBuildActiveCount += 1;
+            setAnalyticsViewsLoading(true, 'Loading charts and tables...');
             try {
                 const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 2);
                 const reset = options?.reset !== false;
@@ -4413,6 +4467,9 @@
                     if (activeDateId) {
                         renderSiteStageKpiStrip(activeDateId, siteKpiStageCounts || siteStageCounts);
                     }
+                }
+                if (summaryBuildActiveCount === 0 && analyticsViewLoadingCount === 0) {
+                    setAnalyticsViewsLoading(false);
                 }
             }
         }
