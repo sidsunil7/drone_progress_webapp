@@ -2537,11 +2537,15 @@
         let zoneMapUpdateTimer = null;
         let latestZoneMapDateRequest = null;
         let latestZoneMapSpinnerRequest = 0;
+        let latestZoneReturnRequestToken = 0;
         let latestSiteOverviewDateRequest = null;
         const pendingZoneMapRequests = new Map();
         let latestSummaryRequestKey = null;
         let latestSummaryPrefetchToken = null;
         let summaryBuildActiveCount = 0;
+        const kpiRateCache = new Map();
+        let siteKpiRateLoadingDateId = null;
+        let latestKpiRateHydrationToken = 0;
         let lastZonePickerDateId = null;
         let blockMapBgImage = null;
         let blockMapBgLoaded = false;
@@ -2810,6 +2814,35 @@
             }
             return Boolean(candidate || workingDaySeries[workingDaySeries.length - 1]);
         }
+        function getKpiRateCacheKey(dateId) {
+            return normalizeIsoDate(dateId) || dateId || null;
+        }
+        function getKpiRateEntryForDate(dateId) {
+            const key = getKpiRateCacheKey(dateId);
+            if (!key) return null;
+            return kpiRateCache.get(key) || null;
+        }
+        function hasKpiRateForDate(dateId) {
+            return Boolean(getKpiRateEntryForDate(dateId) || hasWorkingDayRateForDate(dateId));
+        }
+        function getKpiTrackerRatePerDay(stageKey, dateId) {
+            const cached = getKpiRateEntryForDate(dateId);
+            const cachedRate = cached?.perStage?.[stageKey];
+            if (cachedRate !== null && cachedRate !== undefined && !Number.isNaN(cachedRate)) return cachedRate;
+            return getCurrentWorkingDayStageRate(stageKey, dateId);
+        }
+        function getActiveKpiDateId(dateId = null) {
+            return dateId
+                || lastZonePickerDateId
+                || currentDate
+                || getLatestDateId(availableDates)
+                || null;
+        }
+        function isKpiRateLoadingForDate(dateId) {
+            const activeKey = getKpiRateCacheKey(dateId);
+            const loadingKey = getKpiRateCacheKey(siteKpiRateLoadingDateId);
+            return Boolean(activeKey && loadingKey && activeKey === loadingKey);
+        }
         let siteKpiLoaded = false;
         let siteKpiStageCounts = {};
         let siteKpiDataLoading = false;
@@ -2939,14 +2972,16 @@
             return false;
         }
         function showDateChangeLoadingState(dateId, message = 'Loading overview...') {
+            const activeDateId = getActiveKpiDateId(dateId);
             if (hasCachedDateKpiData(dateId)) {
                 siteKpiDataLoading = false;
-                return;
+            } else {
+                siteKpiDataLoading = true;
+                const container = document.getElementById('siteOverviewTable');
+                if (container) container.innerHTML = getInlineLoaderHtml(message);
             }
-            siteKpiDataLoading = true;
-            renderSiteStageKpiStrip(dateId, siteKpiStageCounts || siteStageCounts);
-            const container = document.getElementById('siteOverviewTable');
-            if (container) container.innerHTML = getInlineLoaderHtml(message);
+            siteKpiRateLoadingDateId = hasKpiRateForDate(activeDateId) ? null : activeDateId;
+            renderSiteStageKpiStrip(activeDateId, siteKpiStageCounts || siteStageCounts);
         }
 
         function renderSiteStageKpiStrip(dateId, stageCountsInput = null) {
@@ -2963,8 +2998,7 @@
             /* Denominator: total trackers from info JSON, else fall back to staged total */
             const denominator = PROJECT_TOTAL_TRACKERS > 0 ? PROJECT_TOTAL_TRACKERS : stageTotalTrackers;
             /* Rate should reflect the selected timeline date. */
-            const selectedRateDateId = dateId
-                || currentDate
+            const selectedRateDateId = getActiveKpiDateId(dateId)
                 || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : null);
             const rateSeriesReady = hasWorkingDayRateForDate(selectedRateDateId);
             const stageStatusSource = (siteStageProgressStatusCounts && Object.keys(siteStageProgressStatusCounts).length)
@@ -3015,7 +3049,7 @@
                 };
                 const stagePercentDenominator = overallTotal > 0 ? overallTotal : 1;
                 const pctComplete = stagePercentDenominator > 0 ? ((stageCompleted / stagePercentDenominator) * 100) : 0;
-                const trackerRatePerDay = getCurrentWorkingDayStageRate(stage.key, selectedRateDateId);
+                const trackerRatePerDay = getKpiTrackerRatePerDay(stage.key, selectedRateDateId);
                 const componentRatePerDay = trackerRatePerDay == null
                     ? null
                     : trackerRatePerDay * getStageComponentsPerTracker(stage.key);
@@ -3023,7 +3057,7 @@
                 const rateText = componentRatePerDay == null
                     ? ''
                     : `${formatNumericValue(componentRatePerDay, 1)} ${rateUnit}`;
-                const showRateLoader = siteKpiDataLoading || !rateSeriesReady;
+                const showRateLoader = isKpiRateLoadingForDate(selectedRateDateId) || (!hasKpiRateForDate(selectedRateDateId) && !rateSeriesReady);
                 const rateMarkup = showRateLoader
                     ? `<span class="site-stage-kpi-stage-count">${getDatapointLoaderHtml()}</span>`
                     : `<span class="site-stage-kpi-stage-count">${rateText || '-'}</span>`;
@@ -4103,13 +4137,11 @@
         }
 
         function returnToZonePicker() {
+            const returnToken = ++latestZoneReturnRequestToken;
             selectedZone = null;
             updateSelectedZoneBanner();
             currentDate = null;
             availableDates = zoneMapDates;
-            // Invalidate zone-specific rate series so site KPIs don't reuse stale rates
-            // while site-level summaries are being rebuilt.
-            workingDaySeries = [];
             layoutData = null;
             selectedTrackerId = null;
             resetTrackerPreview();
@@ -4143,7 +4175,13 @@
                     slider.oninput = (e) => { const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); showDateChangeLoadingState(selectedDate.date); renderZonePickerDateFromCache(selectedDate.date); scheduleZoneMapUpdate(selectedDate.date); syncTimelineUI(index, availableDates); };
                     slider.onchange = (e) => { if (zoneMapUpdateTimer) { clearTimeout(zoneMapUpdateTimer); zoneMapUpdateTimer = null; } const index = parseInt(e.target.value); const selectedDate = availableDates[index]; updateTimelineCurrent(index); updateSelectedZoneBanner(selectedDate.date); showDateChangeLoadingState(selectedDate.date); updateZoneMapForDate(selectedDate.date); syncTimelineUI(index, availableDates); };
                     renderTimelineDots();
-                    updateZoneMapForDate(restoredZoneDateId);
+                    currentDate = restoredZoneDateId;
+                    showDateChangeLoadingState(restoredZoneDateId);
+                    (async () => {
+                        await updateZoneMapForDate(restoredZoneDateId);
+                        if (returnToken !== latestZoneReturnRequestToken) return;
+                        hydrateKpiRateForDate(restoredZoneDateId, { force: true }).catch(() => {});
+                    })();
                 }
             }
             isZonePickerActive = true;
@@ -4155,29 +4193,17 @@
             if (filterSection) filterSection.style.display = 'block';
             renderStageFilters();
             renderStatusFilters();
-            if (availableDates.length > 0) {
-                const activeZoneDateId = lastZonePickerDateId || getLatestDateId(availableDates) || availableDates[availableDates.length - 1].date;
-                showDateChangeLoadingState(activeZoneDateId);
-                renderSiteOverviewTable(activeZoneDateId);
-                // Hydrate active-date rate quickly so components/day resolves
-                // without waiting for full all-date summary rebuild.
-                (async () => {
-                    try {
-                        await ensureSummaryForDate(activeZoneDateId);
-                        rebuildSummaryDerivedTables();
-                        if (isZonePickerActive && !selectedZone && lastZonePickerDateId === activeZoneDateId) {
-                            renderSiteStageKpiStrip(activeZoneDateId, siteKpiStageCounts || siteStageCounts);
-                        }
-                    } catch (_) {}
-                })();
-            }
             _closePanel();
 
             (async () => {
                 try {
                     latestSummaryPrefetchToken = `zone-return|${Date.now()}`;
                     await computeAllDateSummaries({ concurrency: 1, token: latestSummaryPrefetchToken, reset: true });
+                    if (returnToken !== latestZoneReturnRequestToken) return;
                     await refreshAnalyticsViewsAfterSummaryLoad(latestSummaryPrefetchToken);
+                    if (returnToken !== latestZoneReturnRequestToken) return;
+                    const activeDateId = getActiveKpiDateId();
+                    if (activeDateId) renderSiteStageKpiStrip(activeDateId, siteKpiStageCounts || siteStageCounts);
                 } catch (err) { console.error('Site-level summary refresh failed:', err); }
             })();
 
@@ -4303,6 +4329,9 @@
                 return;
             }
             renderSiteOverviewTableFromData(dateId, data);
+            if (HAS_ZONES && isZonePickerActive && !selectedZone) {
+                hydrateKpiRateForDate(dateId).catch(() => {});
+            }
             siteKpiDataLoading = false;
         }
 
@@ -4393,6 +4422,11 @@
                     total += delta;
                 });
                 return { date: row.date, perStage, total };
+            });
+            workingDaySeries.forEach(row => {
+                const key = getKpiRateCacheKey(row.date);
+                if (!key) return;
+                kpiRateCache.set(key, { perStage: { ...row.perStage }, source: 'working-day-series' });
             });
         }
 
@@ -4993,6 +5027,66 @@
             const resp = await timedFetch(getDateSummaryUrl(dateId), {}, `date-summary-${dateId}`);
             const summary = await resp.json();
             return storeSummaryForDate(dateId, summary);
+        }
+        function getCumulativePerStageFromSummary(summary) {
+            const cumulative = { pile: 0, torque_tube: 0, module_rails: 0, solar_panel: 0 };
+            if (!summary || !Array.isArray(summary.trackerStages)) return cumulative;
+            const orderedStages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            summary.trackerStages.forEach(ts => {
+                const idx = orderedStages.indexOf(ts.stage);
+                if (idx === -1) return;
+                if (ts.status === 'completed') {
+                    for (let i = 0; i <= idx; i++) cumulative[orderedStages[i]] += 1;
+                } else {
+                    for (let i = 0; i < idx; i++) cumulative[orderedStages[i]] += 1;
+                }
+            });
+            return cumulative;
+        }
+        async function hydrateKpiRateForDate(dateId, options = {}) {
+            const resolvedDateId = getKpiRateCacheKey(dateId);
+            if (!resolvedDateId || !(HAS_ZONES && isZonePickerActive && !selectedZone)) return;
+            if (hasKpiRateForDate(resolvedDateId) && !options?.force) {
+                if (isKpiRateLoadingForDate(resolvedDateId)) siteKpiRateLoadingDateId = null;
+                return;
+            }
+            const token = ++latestKpiRateHydrationToken;
+            siteKpiRateLoadingDateId = resolvedDateId;
+            renderSiteStageKpiStrip(resolvedDateId, siteKpiStageCounts || siteStageCounts);
+            try {
+                await ensureSummaryForDate(resolvedDateId);
+                const targetIndex = availableDates.findIndex(d => d.date === resolvedDateId);
+                let previousDateId = null;
+                if (targetIndex > 0) previousDateId = availableDates[targetIndex - 1]?.date || null;
+                if (previousDateId) await ensureSummaryForDate(previousDateId);
+                const currentSummary = allDateSummaries[getDateDisplayForId(resolvedDateId)];
+                const previousSummary = previousDateId ? allDateSummaries[getDateDisplayForId(previousDateId)] : null;
+                const currentCounts = getCumulativePerStageFromSummary(currentSummary);
+                const previousCounts = getCumulativePerStageFromSummary(previousSummary);
+                const workingDates = previousDateId
+                    ? buildWorkingCalendarDates(previousDateId, resolvedDateId).filter(d => d > previousDateId && d <= resolvedDateId)
+                    : [resolvedDateId];
+                const divisor = Math.max(1, workingDates.length);
+                const perStage = {
+                    pile: Math.max(0, (currentCounts.pile || 0) - (previousCounts.pile || 0)) / divisor,
+                    torque_tube: Math.max(0, (currentCounts.torque_tube || 0) - (previousCounts.torque_tube || 0)) / divisor,
+                    module_rails: Math.max(0, (currentCounts.module_rails || 0) - (previousCounts.module_rails || 0)) / divisor,
+                    solar_panel: Math.max(0, (currentCounts.solar_panel || 0) - (previousCounts.solar_panel || 0)) / divisor,
+                };
+                kpiRateCache.set(resolvedDateId, { perStage, source: 'active-date-hydration' });
+            } catch (_) {
+                // Keep loader fallback behavior for true data misses.
+            } finally {
+                if (token === latestKpiRateHydrationToken) {
+                    if (getKpiRateCacheKey(siteKpiRateLoadingDateId) === resolvedDateId) {
+                        siteKpiRateLoadingDateId = null;
+                    }
+                    if (HAS_ZONES && isZonePickerActive && !selectedZone) {
+                        const activeDateId = getActiveKpiDateId(resolvedDateId);
+                        renderSiteStageKpiStrip(activeDateId, siteKpiStageCounts || siteStageCounts);
+                    }
+                }
+            }
         }
         function rebuildSummaryDerivedTables() {
             snapshotSeries = [];
