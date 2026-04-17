@@ -1,3 +1,7 @@
 .venv/
 __pycache__/
 .DS_Store
+config/db_config.json
+
+# Local batch tooling (not versioned)
+utils/video_productivity_metrics.py

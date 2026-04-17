@@ -29,6 +29,52 @@ The server will start on `http://localhost:5000`
 
 Navigate to: `http://localhost:5000`
 
+## Video Productivity Metrics (Batch)
+
+Use the standalone script to analyze clips with:
+- custom object model: `model/small_object_detection_bbox_v24.pt`
+- person detector: `yolo12m.pt` (person class only)
+
+### Run on all clips
+
+```bash
+python utils/video_productivity_metrics.py \
+  --input-dir clips \
+  --output-dir outputclips \
+  --object-model model/small_object_detection_bbox_v24.pt \
+  --person-model yolo12m.pt \
+  --frame-step 20 \
+  --recursive
+```
+
+### Run on a single clip directory
+
+```bash
+python utils/video_productivity_metrics.py \
+  --input-dir clips \
+  --output-dir outputclips \
+  --object-model model/small_object_detection_bbox_v24.pt \
+  --person-model yolo12m.pt \
+  --single-video clips/clip2.mp4 \
+  --frame-step 20
+```
+
+### Outputs
+
+For each input video, the script writes:
+- `outputclips/<video_stem>_metrics.json`
+- `outputclips/<video_stem>_annotated.mp4`
+
+And a batch summary:
+- `outputclips/metrics_summary.json`
+
+`*_metrics.json` includes:
+- duration, fps, and total frames
+- first/last frame object counts and computed `modules_installed`
+- first/last frame person counts and computed `crew_count`
+- `mh_per_module` (or `null` if modules installed is zero)
+- assumptions and warnings
+
 ## File Structure
 
 ```

@@ -1,0 +1,37 @@
+{
+  "actual_stage_dates": {
+    "module_rails": null,
+    "pile": null,
+    "solar_panel": null,
+    "torque_tube": null
+  },
+  "created_at": "2026-03-18T11:28:14Z",
+  "manpower_config": {
+    "2026-02-09": {
+      "module_rails": 5,
+      "pile": 5,
+      "solar_panel": 5,
+      "torque_tube": 10,
+      "total": 25
+    },
+    "2026-02-10": {
+      "module_rails": 10,
+      "pile": 7,
+      "solar_panel": 7,
+      "torque_tube": 9,
+      "total": 33
+    },
+    "2026-02-12": {
+      "module_rails": 5,
+      "pile": 10,
+      "solar_panel": 5,
+      "torque_tube": 5,
+      "total": 25
+    }
+  },
+  "manual_dates": [
+    "2026-02-10"
+  ],
+  "project_name": "Sonrisa",
+  "updated_at": "2026-03-25T10:00:19Z"
+}

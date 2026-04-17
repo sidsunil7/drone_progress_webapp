@@ -1096,8 +1096,37 @@
             margin-bottom: 10px;
         }
 
-        .charts-scroll { flex: 1 0 auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; min-height: max-content; }
+        .charts-scroll { flex: 1 0 auto; display: flex; flex-direction: column; gap: 20px; padding-right: 4px; min-height: max-content; }
+        .chart-section { display: flex; flex-direction: column; gap: 12px; }
+        .chart-section-header { font-size: 14px; font-weight: 700; color: var(--hdr); padding-bottom: 6px; border-bottom: 2px solid var(--bdr); margin: 0; }
+        .chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        .chart-grid .full-width { grid-column: 1 / -1; }
+        /* Overview row: Tracker Construction Status (narrow) | Stage Breakdown (wide). */
+        .overview-status-row { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 3fr); gap: 12px; align-items: stretch; }
+        .overview-status-row .chart-card { min-width: 0; }
+        .overview-paired-chart { width: 100%; min-height: 300px; height: 300px; }
+        @media (max-width: 768px) {
+            .chart-grid { grid-template-columns: 1fr; }
+            .chart-grid .full-width { grid-column: auto; }
+            .overview-status-row { grid-template-columns: 1fr; }
+        }
         .chart-card { background: #fff; border-radius: 8px; border: 1px solid var(--bdr); padding: 12px; display: flex; flex-direction: column; gap: 6px; position: relative; }
+        .chart-card h3 { font-size: 12px; font-weight: 600; color: var(--hdr); margin: 0; }
+        .chart-card .chart-subtitle { font-size: 11px; color: var(--txts); margin: 0; }
+        .completion-card { border-left: 3px solid var(--hdr); }
+        .completion-card .badge { display: inline-block; font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-left: 6px; }
+        .completion-card .badge-bottleneck { background: #fff3e0; color: #e65100; }
+        .completion-card .badge-nocrew { background: #fce4ec; color: #c62828; }
+        .planner-card table { width: 100%; border-collapse: collapse; font-size: 11px; }
+        .planner-card th { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--bdr); color: var(--txts); font-weight: 600; }
+        .planner-card td { padding: 3px 6px; border-bottom: 1px solid #f0f0f0; }
+        .planner-card input[type="number"] { width: 50px; font-size: 11px; padding: 2px 4px; border: 1px solid var(--bdr); border-radius: 4px; text-align: center; }
+        .planner-card .optimize-btn,
+        .planner-card .reset-planner-btn { padding: 4px 12px; font-size: 11px; font-weight: 600; border: none; border-radius: 4px; cursor: pointer; }
+        .planner-card .optimize-btn { background: var(--hdr); color: #fff; }
+        .planner-card .optimize-btn:hover { background: var(--hdr-dark); }
+        .planner-card .reset-planner-btn { background: #fff; color: var(--hdr); border: 1px solid var(--bdr); }
+        .planner-card .reset-planner-btn:hover { background: var(--pg); border-color: var(--hdr); }
         .table-card.analytics-card-loading::before,
         .chart-card.analytics-card-loading::before {
             content: '';
@@ -1424,7 +1453,42 @@
         .settings-benchmark-table tr:last-child td {
             border-bottom: 0;
         }
+
+        /* Suppress main app UI if someone prints from the app window directly */
+        @media print {
+            body > * { display: none !important; }
+        }
+
+        /* ── Leaflet zone map ── */
+        #leafletZoneMap {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+        }
+        .lf-video-icon { cursor: pointer; background: none; border: none; }
+        .lf-zone-label {
+            background: none;
+            border: none;
+            pointer-events: none;
+        }
+        .lf-zone-label span {
+            display: inline-block;
+            background: rgba(0,0,0,0.52);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 700;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            letter-spacing: 0.02em;
+            padding: 2px 5px;
+            border-radius: 3px;
+            white-space: nowrap;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            transform: translate(-50%, -50%);
+        }
     </style>
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 </head>
 <body>
 <div id="app">
@@ -1436,6 +1500,7 @@
         <!-- Zone picker map (HAS_ZONES mode) -->
         <div id="zonePicker">
             <canvas id="blockMapCanvas"></canvas>
+            <div id="leafletZoneMap"></div>
         </div>
         <!-- Zone hover tooltip -->
         <div id="zone-hover-tip" style="display:none"></div>
@@ -1661,29 +1726,164 @@
     <div id="chartsView" class="full-view-overlay" data-loading-label="Loading charts...">
         <div class="full-view-inner" style="overflow-y:auto">
             <div class="charts-scroll">
-                <div class="chart-card" data-card-loading-label="Loading stage distribution...">
-                    <h2>Stage Distribution (Pie Chart)</h2>
-                    <p>Select a date to view how many trackers are in each stage on that day.</p>
-                    <div>
-                        <label for="dailyPieDateSelect" style="font-size:12px;margin-right:4px">Date:</label>
-                        <select id="dailyPieDateSelect"></select>
-                        <span id="dailyPieTotal" style="font-size:12px;color:var(--hdr);font-weight:600;margin-left:8px"></span>
+
+                <!-- Print Report bar -->
+                <div style="display:flex;justify-content:flex-end;padding:0 2px 4px;flex-shrink:0">
+                    <button id="printReportBtn" onclick="generateReport()" title="Print / Save as PDF" style="display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:6px;border:1px solid var(--bdr,#dde);background:var(--card,#fff);color:var(--hdr,#222);font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.08)">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                        Print Report
+                    </button>
+                </div>
+
+                <!-- ═══ SECTION 1: OVERVIEW ═══ -->
+                <div class="chart-section">
+                    <h2 class="chart-section-header">Overview</h2>
+                    <div class="chart-grid">
+                        <!-- Projected Site Completion -->
+                        <div class="chart-card full-width completion-card" id="projectedCompletionCard">
+                            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+                                <h3>Projected Site Completion</h3>
+                                <div id="completionBadges"></div>
+                            </div>
+                            <div id="projectedDateLabel" style="font-size:18px;font-weight:700;color:var(--hdr);margin:4px 0"></div>
+                            <div style="overflow-x:auto">
+                                <table class="data-table" id="projectedCompletionTable">
+                                    <thead><tr><th>Stage</th><th>Done</th><th>Left</th><th>Rate/day</th><th>Workers</th><th>Per Worker</th><th>Est. Date</th></tr></thead>
+                                    <tbody id="projectedCompletionBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Worker Allocation Planner -->
+                        <div class="chart-card full-width planner-card" id="workerPlannerCard">
+                            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px">
+                                <h3>Worker Allocation Planner</h3>
+                                <div style="display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;justify-content:flex-end">
+                                    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+                                        <span id="plannerTotalWorkers" style="font-size:11px;color:var(--txts)"></span>
+                                        <span id="plannerDbHint" style="font-size:10px;color:var(--txts);max-width:280px;text-align:right;line-height:1.3"></span>
+                                    </div>
+                                    <div style="display:flex;align-items:center;gap:6px">
+                                        <button type="button" class="reset-planner-btn" id="resetWorkersBtn" title="Restore worker counts from saved staffing for this chart date">Reset</button>
+                                        <button type="button" class="optimize-btn" id="optimizeWorkersBtn" title="Split current total workers evenly across stages">Optimize</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div style="overflow-x:auto">
+                                <table class="data-table" id="workerPlannerTable">
+                                    <thead><tr><th>Stage</th><th>Left</th><th>Prod./w/d</th><th>Workers</th><th>Rate/day</th><th>Days Left</th><th>Est. Date</th><th>Constrained By</th></tr></thead>
+                                    <tbody id="workerPlannerBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Tracker Construction Status + Stage Breakdown -->
+                        <div class="full-width overview-status-row">
+                            <div class="chart-card">
+                                <h3>Tracker Construction Status</h3>
+                                <p class="chart-subtitle" id="constructionStatusSubtitle"></p>
+                                <div id="constructionStatusChart" class="overview-paired-chart"></div>
+                            </div>
+
+                            <div class="chart-card">
+                                <h3>Stage Breakdown</h3>
+                                <p class="chart-subtitle" id="stageBreakdownSubtitle"></p>
+                                <div id="stageBreakdownChart" class="overview-paired-chart"></div>
+                            </div>
+                        </div>
                     </div>
-                    <div id="dailyPieChart" style="width:100%;height:260px"></div>
                 </div>
-                <div class="chart-card" data-card-loading-label="Loading progress chart...">
-                    <div id="progressStageSelector" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px"></div>
-                    <div id="progressChart" style="min-height:220px"></div>
+
+                <!-- ═══ SECTION 2: TRENDS ═══ -->
+                <div class="chart-section">
+                    <h2 class="chart-section-header">Trends</h2>
+                    <div class="chart-grid">
+                        <!-- Tracker Completion Trend -->
+                        <div class="chart-card full-width">
+                            <h3>Tracker Completion Trend</h3>
+                            <div id="completionTrendChart" style="width:100%;min-height:280px"></div>
+                        </div>
+                        <!-- Stage Completion Over Time -->
+                        <div class="chart-card full-width">
+                            <h3>Stage Completion Over Time</h3>
+                            <div id="stageOverTimeChart" style="width:100%;min-height:280px"></div>
+                        </div>
+                    </div>
                 </div>
-                <div class="chart-card" data-card-loading-label="Loading manpower chart...">
-                    <div id="manpowerChart" style="min-height:220px"></div>
+
+                <!-- ═══ SECTION 3: RATES & PRODUCTIVITY ═══ -->
+                <div class="chart-section">
+                    <h2 class="chart-section-header">Rates &amp; Productivity</h2>
+                    <div class="chart-grid">
+                        <!-- Tracker Completion Rate -->
+                        <div class="chart-card">
+                            <h3>Tracker Completion Rate</h3>
+                            <p class="chart-subtitle">trackers / day</p>
+                            <div id="completionRateChart" style="width:100%;min-height:240px"></div>
+                        </div>
+                        <!-- Installation Rate -->
+                        <div class="chart-card">
+                            <h3>Installation Rate</h3>
+                            <p class="chart-subtitle">completions / day</p>
+                            <div id="installationRateChart" style="width:100%;min-height:240px"></div>
+                        </div>
+                        <!-- Productivity Rate -->
+                        <div class="chart-card">
+                            <h3>Productivity Rate</h3>
+                            <p class="chart-subtitle">completions / worker / day</p>
+                            <div id="productivityRateChart" style="width:100%;min-height:240px"></div>
+                        </div>
+                        <!-- Staffing vs Output -->
+                        <div class="chart-card">
+                            <h3>Staffing vs Output</h3>
+                            <p class="chart-subtitle">workers &amp; completions/day</p>
+                            <div id="staffingOutputChart" style="width:100%;min-height:240px"></div>
+                        </div>
+                        <!-- Progress by Stage (existing) -->
+                        <div class="chart-card full-width" data-card-loading-label="Loading progress chart...">
+                            <div id="progressStageSelector" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:4px"></div>
+                            <div id="progressChart" style="min-height:220px"></div>
+                        </div>
+                        <!-- Manpower by Stage (existing) -->
+                        <div class="chart-card full-width" data-card-loading-label="Loading manpower chart...">
+                            <div id="manpowerChart" style="min-height:220px"></div>
+                        </div>
+                        <!-- Productivity MH/MW (existing) -->
+                        <div class="chart-card" data-card-loading-label="Loading MH/MW chart...">
+                            <div id="productivityMhMwChart" style="min-height:220px"></div>
+                        </div>
+                        <!-- Productivity MH/mod (existing) -->
+                        <div class="chart-card" data-card-loading-label="Loading MH/mod chart...">
+                            <div id="productivityMhModChart" style="min-height:220px"></div>
+                        </div>
+                    </div>
                 </div>
-                <div class="chart-card" data-card-loading-label="Loading MH/MW chart...">
-                    <div id="productivityMhMwChart" style="min-height:220px"></div>
+
+                <!-- ═══ SECTION 4: SITE HEALTH ═══ -->
+                <div class="chart-section">
+                    <h2 class="chart-section-header">Site Health</h2>
+                    <div class="chart-grid">
+                        <!-- Flight-over-Flight Progress -->
+                        <div class="chart-card full-width">
+                            <h3>Flight-over-Flight Progress</h3>
+                            <p class="chart-subtitle" id="fofSubtitle"></p>
+                            <div id="flightOverFlightChart" style="width:100%;min-height:280px"></div>
+                        </div>
+                        <!-- Zone Performance -->
+                        <div class="chart-card">
+                            <h3>Zone Performance</h3>
+                            <p class="chart-subtitle" id="zonePerformanceSubtitle"></p>
+                            <div id="zonePerformanceChart" style="width:100%;min-height:280px"></div>
+                        </div>
+                        <!-- Delays & Stalls -->
+                        <div class="chart-card">
+                            <h3>Delays &amp; Stalls</h3>
+                            <p class="chart-subtitle" id="delaysStallsSubtitle"></p>
+                            <div id="delaysStallsChart" style="width:100%;min-height:280px"></div>
+                        </div>
+                    </div>
                 </div>
-                <div class="chart-card" data-card-loading-label="Loading MH/mod chart...">
-                    <div id="productivityMhModChart" style="min-height:220px"></div>
-                </div>
+
             </div>
         </div>
     </div>
@@ -1824,9 +2024,16 @@
                 if (view === 'map') {
                     // map is always underneath — nothing to show/hide
                     timeline.classList.add('visible');
+                    restoreMapTimelineHandlers();
                 } else {
-                    timeline.classList.remove('visible');
                     if (overlayMap[view]) overlayMap[view].classList.add('active');
+                    if (view === 'charts') {
+                        timeline.classList.add('visible');
+                        activateChartsTimelineMode();
+                    } else {
+                        timeline.classList.remove('visible');
+                        restoreMapTimelineHandlers();
+                    }
                     if ((view === 'table' || view === 'charts') && (summaryBuildActiveCount > 0 || analyticsViewLoadingCount > 0)) {
                         setAnalyticsViewsLoading(true, view === 'charts' ? 'Loading charts...' : 'Loading tables...');
                     }
@@ -1863,6 +2070,58 @@
     // The original code calls timelineContainer.style.display = '' to show.
     // We intercept: when it becomes visible, show our styled timeline instead.
     // We also bridge the original slider events to our custom rail.
+
+    let _savedMapTimelineOnInput = null;
+    let _savedMapTimelineOnChange = null;
+    let _chartsTimelineModeActive = false;
+
+    function getMultiDateTimelineEntries(data) {
+        const dates = data?.dates || [];
+        const displayMap = data?.date_displays || {};
+        return dates.map(dateId => {
+            const disp = displayMap[dateId] || mdFormatDate(dateId);
+            return { date: dateId, display: disp, label: disp };
+        });
+    }
+
+    function restoreMapTimelineHandlers() {
+        const slider = document.getElementById('timelineSlider');
+        if (!slider) return;
+        if (_savedMapTimelineOnInput) slider.oninput = _savedMapTimelineOnInput;
+        if (_savedMapTimelineOnChange) slider.onchange = _savedMapTimelineOnChange;
+        _chartsTimelineModeActive = false;
+    }
+
+    function activateChartsTimelineMode() {
+        const slider = document.getElementById('timelineSlider');
+        if (!slider || !multiDateData?.dates?.length) return;
+        if (!_chartsTimelineModeActive) {
+            _savedMapTimelineOnInput = slider.oninput;
+            _savedMapTimelineOnChange = slider.onchange;
+        }
+        _chartsTimelineModeActive = true;
+        const timelineDates = getMultiDateTimelineEntries(multiDateData);
+        const selectedDate = getChartsSelectedDate(multiDateData);
+        const selectedIndex = Math.max(0, multiDateData.dates.indexOf(selectedDate));
+        slider.min = 0;
+        slider.max = Math.max(0, timelineDates.length - 1);
+        slider.step = 1;
+        slider.value = selectedIndex;
+        updateTimelineCurrent(selectedIndex);
+        syncTimelineUI(selectedIndex, timelineDates);
+
+        const onChartTimelineChange = (e) => {
+            if (!multiDateData?.dates?.length) return;
+            const index = Math.max(0, Math.min(multiDateData.dates.length - 1, parseInt(e.target.value, 10) || 0));
+            const selectedDateId = multiDateData.dates[index];
+            setChartsSelectedDate(selectedDateId, multiDateData);
+            updateTimelineCurrent(index);
+            syncTimelineUI(index, getMultiDateTimelineEntries(multiDateData));
+            renderMultiDateChartsForSelectedDate(multiDateData);
+        };
+        slider.oninput = onChartTimelineChange;
+        slider.onchange = onChartTimelineChange;
+    }
 
     function closeDetailPanelIfOpen() {
         const panel = document.getElementById('detail-panel');
@@ -2416,6 +2675,7 @@
         const PROJECT = "{{ project|default('Lewis') }}";
         const HAS_ZONES = {{ has_zones|default(false)|tojson }};
         let currentDate = null;
+        let chartsSelectedDateId = null;
         let availableDates = [];
         let zoneMapDates = [];
 
@@ -2424,6 +2684,13 @@
         let _zmBaseScale = 1, _zmBaseOffsetX = 0, _zmBaseOffsetY = 0;
         let _zmDragActive = false, _zmDragMoved = false, _zmSuppressClick = false;
         let _zmLastDragX = 0, _zmLastDragY = 0, _zmInteractionsBound = false;
+
+        /* ── Leaflet zone map ── */
+        const USE_LEAFLET_ZONE_MAP = true;
+        let _leafletMap = null;
+        let _leafletZoneLayers = new Map();
+        let _leafletVideoMarkers = [];
+        let _leafletSiteOverlay = null;
         function _applyZMTransform() {
             const c = document.getElementById('blockMapCanvas');
             if (c) c.style.transform = `translate(${_zmPanX}px,${_zmPanY}px) scale(${_zmZoom})`;
@@ -2529,6 +2796,179 @@
             }, { passive: false });
             _zmInteractionsBound = true;
         }
+
+        /* ──────────────────────────────────────────────────────
+           Leaflet zone map helpers
+        ────────────────────────────────────────────────────── */
+        function _leafletZoneFill(z) {
+            if (z.stage && STAGE_COLORS_CSS[z.stage]) return STAGE_COLORS_CSS[z.stage];
+            return z.available ? ZONE_DEFAULT_FILL : ZONE_UNAVAILABLE_FILL;
+        }
+
+        function _leafletBuildTooltipHtml(zone) {
+            const cached = siteOverviewCache.get(lastZonePickerDateId);
+            const zoneRow = cached?.zones?.find(r => r.zone === zone);
+            const total     = zoneRow?.total     ?? '—';
+            const completed = zoneRow?.completed ?? '—';
+            const pct       = zoneRow?.pct       ?? null;
+            const barWidth  = pct != null ? Math.min(100, parseFloat(pct)) : 0;
+            return `<div class="zht-title">${zone}</div>
+                <div class="zht-row"><span class="zht-label">Total Trackers</span><span class="zht-val">${total}</span></div>
+                <div class="zht-row"><span class="zht-label">Completed</span><span class="zht-val">${completed}</span></div>
+                <div class="zht-row"><span class="zht-label">% Complete</span><span class="zht-val">${pct != null ? pct + '%' : '—'}</span></div>
+                <div class="zht-bar-wrap"><div class="zht-bar" style="width:${barWidth}%"></div></div>`;
+        }
+
+        function _leafletDrawZones(zoneData) {
+            if (!_leafletMap || !zoneData || !zoneData.zones) return;
+
+            /* Remove previous layers */
+            if (_leafletSiteOverlay) { _leafletMap.removeLayer(_leafletSiteOverlay); _leafletSiteOverlay = null; }
+            _leafletZoneLayers.forEach(layer => _leafletMap.removeLayer(layer));
+            _leafletZoneLayers.clear();
+            _leafletVideoMarkers.forEach(m => _leafletMap.removeLayer(m));
+            _leafletVideoMarkers = [];
+            zoneVideoIconHitboxes = [];
+
+            /* ── Site-wide background overlay (drawn first, sits beneath zone boxes) ── */
+            if (zoneData.overall_bounds) {
+                const ob = zoneData.overall_bounds;
+                _leafletSiteOverlay = L.rectangle(
+                    [[ob.min_lat, ob.min_lon], [ob.max_lat, ob.max_lon]],
+                    {
+                        color: '#014059',
+                        weight: 2,
+                        dashArray: '6 4',
+                        fillColor: '#014059',
+                        fillOpacity: 0.08,
+                        interactive: false,
+                        className: 'lf-site-overlay',
+                    }
+                ).addTo(_leafletMap);
+            }
+
+            const tip = document.getElementById('zone-hover-tip');
+
+            const videoSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="18" height="18">
+                <rect x="6" y="6" width="52" height="52" rx="12" fill="#014059"/>
+                <rect x="15" y="21" width="25" height="22" rx="6" fill="#ffffff"/>
+                <path d="M40 27 L50 22 Q52 21 52 23 L52 41 Q52 43 50 42 L40 37 Z" fill="#ffffff"/>
+            </svg>`;
+
+            for (const z of (zoneData.zones || [])) {
+                const b = z.bounds;
+                if (!b) continue;
+                const bounds = [[b.min_lat, b.min_lon], [b.max_lat, b.max_lon]];
+                const fillColor = _leafletZoneFill(z);
+
+                const rect = L.rectangle(bounds, {
+                    color: 'rgba(255,255,255,0.85)',
+                    weight: 1.5,
+                    fillColor: fillColor,
+                    fillOpacity: 1,
+                    className: 'lf-zone-rect',
+                    interactive: Boolean(z.available),
+                });
+
+                if (z.available) {
+                    rect.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        if (typeof showZonePreview === 'function') showZonePreview(z.zone);
+                    });
+                    rect.on('mouseover', (e) => {
+                        if (!tip) return;
+                        tip.innerHTML = _leafletBuildTooltipHtml(z.zone);
+                        tip.style.display = 'block';
+                        tip.style.left = (e.originalEvent.clientX + 14) + 'px';
+                        tip.style.top  = (e.originalEvent.clientY - 10) + 'px';
+                    });
+                    rect.on('mousemove', (e) => {
+                        if (!tip || tip.style.display === 'none') return;
+                        tip.style.left = (e.originalEvent.clientX + 14) + 'px';
+                        tip.style.top  = (e.originalEvent.clientY - 10) + 'px';
+                        const tr = tip.getBoundingClientRect();
+                        if (tr.right  > window.innerWidth  - 8) tip.style.left = (e.originalEvent.clientX - tr.width - 14) + 'px';
+                        if (tr.bottom > window.innerHeight - 8) tip.style.top  = (e.originalEvent.clientY - tr.height + 10) + 'px';
+                    });
+                    rect.on('mouseout', () => {
+                        if (tip) tip.style.display = 'none';
+                    });
+                }
+
+                rect.addTo(_leafletMap);
+                _leafletZoneLayers.set(z.zone, rect);
+
+                /* Zone name label at center */
+                const centerLat = (b.min_lat + b.max_lat) / 2;
+                const centerLon = (b.min_lon + b.max_lon) / 2;
+                const labelIcon = L.divIcon({
+                    html: `<span>${z.zone}</span>`,
+                    className: 'lf-zone-label',
+                    iconSize: null,
+                    iconAnchor: [0, 0],
+                });
+                const labelMarker = L.marker([centerLat, centerLon], { icon: labelIcon, interactive: false, keyboard: false });
+                labelMarker.addTo(_leafletMap);
+                _leafletVideoMarkers.push(labelMarker); /* reuse the cleanup array */
+
+                /* Video icon marker at NE corner */
+                const clips = Array.isArray(z.video_clips) ? z.video_clips : [];
+                if (clips.length > 0) {
+                    const videoIcon = L.divIcon({
+                        html: videoSvg,
+                        className: 'lf-video-icon',
+                        iconSize: [18, 18],
+                        iconAnchor: [18, 0],
+                    });
+                    const marker = L.marker([b.max_lat, b.max_lon], { icon: videoIcon, interactive: true });
+                    marker.on('click', (e) => {
+                        L.DomEvent.stopPropagation(e);
+                        if (typeof openZoneVideoModal === 'function') {
+                            openZoneVideoModal(z.zone, lastZonePickerDateId, clips);
+                        }
+                    });
+                    marker.addTo(_leafletMap);
+                    _leafletVideoMarkers.push(marker);
+                }
+            }
+        }
+
+        function _initOrUpdateLeafletZoneMap(zoneData, fitBounds = false) {
+            if (!zoneData || !zoneData.overall_bounds) return;
+            const ob = zoneData.overall_bounds;
+            const container = document.getElementById('leafletZoneMap');
+            if (!container) return;
+
+            /* Hide canvas, show Leaflet div */
+            const canvas = document.getElementById('blockMapCanvas');
+            if (canvas) { canvas.style.display = 'none'; canvas.width = 0; canvas.height = 0; }
+
+            const isFirstInit = !_leafletMap;
+            if (isFirstInit) {
+                _leafletMap = L.map('leafletZoneMap', {
+                    zoomControl: false,
+                    attributionControl: true,
+                });
+                L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                    attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+                    maxZoom: 19,
+                }).addTo(_leafletMap);
+            }
+
+            /* Fit bounds on first init or when explicitly requested (e.g. returning to zone picker) */
+            if (isFirstInit || fitBounds) {
+                _leafletMap.fitBounds(
+                    [[ob.min_lat, ob.min_lon], [ob.max_lat, ob.max_lon]],
+                    { padding: [50, 50] }
+                );
+            }
+
+            _leafletDrawZones(zoneData);
+
+            /* Invalidate size in case the container was hidden when the map was first created */
+            setTimeout(() => { if (_leafletMap) _leafletMap.invalidateSize(); }, 100);
+        }
+
         let layoutData = null;
         let canvas = null;
         let ctx = null;
@@ -2536,6 +2976,8 @@
         let scaleX = 1;
         let scaleY = 1;
         let imageScaleFactor = 1.0;
+        let imageScaleFactorX = 1.0;
+        let imageScaleFactorY = 1.0;
         let selectedTrackerId = null;
         let trackerZoomLevel = 1.0;
         let isZonePickerActive = false;
@@ -2631,6 +3073,17 @@
             return latest?.date || null;
         }
 
+        function sortDatesChronologically(dates = []) {
+            if (!Array.isArray(dates)) return [];
+            const key = (value) => String(value || '').replace(/[^\d]/g, '').slice(0, 8);
+            return [...dates].sort((a, b) => {
+                const aDate = key(a?.date);
+                const bDate = key(b?.date);
+                if (aDate !== bDate) return aDate.localeCompare(bDate);
+                return String(a?.date || '').localeCompare(String(b?.date || ''));
+            });
+        }
+
         const STAGE_COLORS_CSS = {
             pile:         'rgba(167, 139, 250, 0.32)',
             torque_tube:  'rgba(217, 70, 239, 0.32)',
@@ -2640,7 +3093,8 @@
         const ZONE_DEFAULT_FILL     = 'rgba(52, 211, 153, 0.26)';
         const ZONE_UNAVAILABLE_FILL = 'rgba(100, 116, 139, 0.22)';
 
-        function drawBlockMapCanvas(zoneData) {
+        function drawBlockMapCanvas(zoneData, fitBoundsOverride = false) {
+            if (USE_LEAFLET_ZONE_MAP) { _initOrUpdateLeafletZoneMap(zoneData, fitBoundsOverride); return; }
             const mapStart = performance.now();
             const canvas = document.getElementById('blockMapCanvas');
             if (!canvas || !zoneData || !zoneData.overall_bounds) return;
@@ -2755,6 +3209,8 @@
         let workingDaySeries = [];
         let snapshotSeries = [];
         let tableSeries = [];
+        let multiDateData = null;
+        let multiDateFetchPromise = null;
 
         let HOURS_PER_DAY = 10;
         let MW_PER_TRACKER = 0.048;
@@ -3205,14 +3661,42 @@
 
         function getDroneDateDisplays() { return availableDates.map(dateInfo => dateInfo.display); }
 
+        /** Flight dates as YYYY-MM-DD (from folder ids). Prefer over display strings so rows match DB keys. */
+        function getDroneDateIsoList() {
+            if (!availableDates || !availableDates.length) return [];
+            return availableDates.map(d => normalizeIsoDate(d.date)).filter(Boolean);
+        }
+
+        /** Crew-change dates must not include drone flight days; those are automatic. */
+        function isManualOnlyManpowerDate(dateStr) {
+            return manualDates.includes(dateStr) && !getDroneDateIsoList().includes(dateStr);
+        }
+
+        /** Drop flight IDs from manual_dates (fixes DB/UI if a flight was later added or mis-tagged). */
+        function reconcileManualDatesWithFlightDates() {
+            const flights = new Set(getDroneDateIsoList());
+            if (!flights.size || !manualDates.length) return;
+            const next = manualDates.filter(d => !flights.has(d));
+            if (next.length === manualDates.length) return;
+            manualDates = next;
+            initializeManpowerConfig();
+            renderManpowerTable();
+            scheduleManpowerSave();
+        }
+
         function syncManualDatesWithConfig() {
             manualDates = Array.from(new Set([...(manualDates || [])]))
                 .map(normalizeIsoDate).filter(Boolean).sort();
         }
 
         function getManpowerInputDates() {
-            const dates = new Set([...getDroneDateDisplays(), ...(manualDates || []), ...(PROJECT_START_DATE ? [PROJECT_START_DATE] : [])]);
-            return Array.from(dates).map(normalizeIsoDate).filter(Boolean).sort();
+            const dates = new Set([
+                ...getDroneDateIsoList(),
+                ...(manualDates || []).map(d => normalizeIsoDate(d)).filter(Boolean),
+                ...(PROJECT_START_DATE ? [normalizeIsoDate(PROJECT_START_DATE)].filter(Boolean) : []),
+                ...Object.keys(manpowerConfig || {}).map(d => normalizeIsoDate(d)).filter(Boolean),
+            ]);
+            return Array.from(dates).filter(Boolean).sort();
         }
 
         function serializeManpowerConfig() {
@@ -3226,7 +3710,7 @@
         }
 
         function getAnalyticsDateBounds() {
-            const dates = [PROJECT_START_DATE, PROJECT_END_DATE, ...getDroneDateDisplays(), ...(manualDates || []), ...Object.keys(manpowerConfig || {})]
+            const dates = [PROJECT_START_DATE, PROJECT_END_DATE, ...getDroneDateIsoList(), ...(manualDates || []), ...Object.keys(manpowerConfig || {})]
                 .map(normalizeIsoDate).filter(Boolean).sort();
             if (!dates.length) return { min: null, max: null };
             return { min: dates[0], max: dates[dates.length - 1] };
@@ -3265,7 +3749,9 @@
         }
 
         async function saveManpowerData() {
-            const payload = { project_name: PROJECT, manual_dates: [...(manualDates || [])].sort(), manpower_config: serializeManpowerConfig(), actual_stage_dates: { ...actualStageDates } };
+            const flightSet = new Set(getDroneDateIsoList());
+            const manualOnly = [...(manualDates || [])].filter(d => !flightSet.has(d)).sort();
+            const payload = { project_name: PROJECT, manual_dates: manualOnly, manpower_config: serializeManpowerConfig(), actual_stage_dates: { ...actualStageDates } };
             const response = await fetch('/api/manpower_data', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
             const data = await response.json();
             if (!response.ok || data.error) throw new Error(data.error || 'Unable to save manpower data.');
@@ -3293,7 +3779,7 @@
                 if (!dateStr) { setManpowerStatus('Choose a valid manual date first.', true); return; }
                 if (bounds.min && dateStr < bounds.min) { setManpowerStatus(`Manual dates must be on or after ${bounds.min}.`, true); return; }
                 if (bounds.max && dateStr > bounds.max) { setManpowerStatus(`Manual dates must be on or before ${bounds.max}.`, true); return; }
-                if (manualDates.includes(dateStr) || getDroneDateDisplays().includes(dateStr)) { setManpowerStatus(`Date ${dateStr} already exists.`, true); return; }
+                if (manualDates.includes(dateStr) || getDroneDateIsoList().includes(dateStr)) { setManpowerStatus(`Date ${dateStr} already exists.`, true); return; }
                 manualDates = [...manualDates, dateStr].sort();
                 manpowerConfig[dateStr] = getSuggestedManpowerEntry(dateStr);
                 initializeManpowerConfig();
@@ -3363,7 +3849,6 @@
                 renderProductivityTable();
                 updateStageCompletionEstimates();
                 initializeCharts();
-                initializeDailyPieChart();
             } finally {
                 analyticsViewLoadingCount = Math.max(0, analyticsViewLoadingCount - 1);
                 if (analyticsViewLoadingCount === 0 && summaryBuildActiveCount === 0) {
@@ -3391,7 +3876,8 @@
                 if (data.error) { showError(data.error); return; }
                 if (data.dates.length === 0) { document.getElementById('layoutContainer').innerHTML = '<div class="error">No dates found. Please ensure date folders exist in tracker_webapp/layout_data folder.</div>'; return; }
                 
-                availableDates = data.dates;
+                availableDates = sortDatesChronologically(data.dates);
+                reconcileManualDatesWithFlightDates();
 
                 const siteOverviewSection = document.getElementById('siteOverviewSection');
                 const filterSection = document.getElementById('filterSection');
@@ -3480,84 +3966,88 @@
                 const data = await resp.json();
                 if (data.error) { showError(data.error); return; }
                 zoneMeta = data;
-                const mapCanvas = document.getElementById('blockMapCanvas');
-                if (mapCanvas) {
-                    await loadBlockMapBackground();
-                    drawBlockMapCanvas(data);
-                    _bindZonePickerInteractions();
-                    mapCanvas.addEventListener('click', (event) => {
-                        if (_zmSuppressClick) { _zmSuppressClick = false; return; }
-                        const videoHit = getZoneVideoHitFromClick(event);
-                        if (videoHit) {
-                            openZoneVideoModal(videoHit.zone, lastZonePickerDateId, videoHit.clips);
-                            return;
-                        }
-                        const zone = getZoneFromClick(event);
-                        if (zone) selectZone(zone);
-                    });
+                if (USE_LEAFLET_ZONE_MAP) {
+                    _initOrUpdateLeafletZoneMap(data, true);
+                } else {
+                    const mapCanvas = document.getElementById('blockMapCanvas');
+                    if (mapCanvas) {
+                        await loadBlockMapBackground();
+                        drawBlockMapCanvas(data);
+                        _bindZonePickerInteractions();
+                        mapCanvas.addEventListener('click', (event) => {
+                            if (_zmSuppressClick) { _zmSuppressClick = false; return; }
+                            const videoHit = getZoneVideoHitFromClick(event);
+                            if (videoHit) {
+                                openZoneVideoModal(videoHit.zone, lastZonePickerDateId, videoHit.clips);
+                                return;
+                            }
+                            const zone = getZoneFromClick(event);
+                            if (zone) selectZone(zone);
+                        });
 
-                    /* ── zone hover tooltip ── */
-                    const tip = document.getElementById('zone-hover-tip');
-                    let _lastHoveredZone = null;
-                    mapCanvas.addEventListener('mousemove', (event) => {
-                        if (_zmDragActive) {
-                            if (tip) tip.style.display = 'none';
-                            return;
-                        }
-                        const zone = getZoneFromClick(event);
-                        if (!zone) {
+                        /* ── zone hover tooltip ── */
+                        const tip = document.getElementById('zone-hover-tip');
+                        let _lastHoveredZone = null;
+                        mapCanvas.addEventListener('mousemove', (event) => {
+                            if (_zmDragActive) {
+                                if (tip) tip.style.display = 'none';
+                                return;
+                            }
+                            const zone = getZoneFromClick(event);
+                            if (!zone) {
+                                if (tip) tip.style.display = 'none';
+                                _lastHoveredZone = null;
+                                mapCanvas.style.cursor = 'grab';
+                                return;
+                            }
+                            mapCanvas.style.cursor = 'pointer';
+                            if (tip) {
+                                if (zone !== _lastHoveredZone) {
+                                    _lastHoveredZone = zone;
+                                    const cached = siteOverviewCache.get(lastZonePickerDateId);
+                                    const zoneRow = cached?.zones?.find(r => r.zone === zone);
+                                    const total     = zoneRow?.total     ?? '—';
+                                    const completed = zoneRow?.completed ?? '—';
+                                    const pct       = zoneRow?.pct       ?? null;
+                                    const barWidth  = pct != null ? Math.min(100, parseFloat(pct)) : 0;
+                                    tip.innerHTML = `
+                                        <div class="zht-title">${zone}</div>
+                                        <div class="zht-row">
+                                            <span class="zht-label">Total Trackers</span>
+                                            <span class="zht-val">${total}</span>
+                                        </div>
+                                        <div class="zht-row">
+                                            <span class="zht-label">Completed</span>
+                                            <span class="zht-val">${completed}</span>
+                                        </div>
+                                        <div class="zht-row">
+                                            <span class="zht-label">% Complete</span>
+                                            <span class="zht-val">${pct != null ? pct + '%' : '—'}</span>
+                                        </div>
+                                        <div class="zht-bar-wrap"><div class="zht-bar" style="width:${barWidth}%"></div></div>`;
+                                }
+                                tip.style.display = 'block';
+                                tip.style.left = (event.clientX + 14) + 'px';
+                                tip.style.top  = (event.clientY - 10) + 'px';
+                                const tr = tip.getBoundingClientRect();
+                                if (tr.right  > window.innerWidth  - 8) tip.style.left = (event.clientX - tr.width - 14) + 'px';
+                                if (tr.bottom > window.innerHeight - 8) tip.style.top  = (event.clientY - tr.height + 10) + 'px';
+                            }
+                        });
+                        mapCanvas.addEventListener('mouseleave', () => {
                             if (tip) tip.style.display = 'none';
                             _lastHoveredZone = null;
                             mapCanvas.style.cursor = 'grab';
-                            return;
-                        }
-                        mapCanvas.style.cursor = 'pointer';
-                        if (tip) {
-                            if (zone !== _lastHoveredZone) {
-                                _lastHoveredZone = zone;
-                                const cached = siteOverviewCache.get(lastZonePickerDateId);
-                                const zoneRow = cached?.zones?.find(r => r.zone === zone);
-                                const total     = zoneRow?.total     ?? '—';
-                                const completed = zoneRow?.completed ?? '—';
-                                const pct       = zoneRow?.pct       ?? null;
-                                const barWidth  = pct != null ? Math.min(100, parseFloat(pct)) : 0;
-                                tip.innerHTML = `
-                                    <div class="zht-title">${zone}</div>
-                                    <div class="zht-row">
-                                        <span class="zht-label">Total Trackers</span>
-                                        <span class="zht-val">${total}</span>
-                                    </div>
-                                    <div class="zht-row">
-                                        <span class="zht-label">Completed</span>
-                                        <span class="zht-val">${completed}</span>
-                                    </div>
-                                    <div class="zht-row">
-                                        <span class="zht-label">% Complete</span>
-                                        <span class="zht-val">${pct != null ? pct + '%' : '—'}</span>
-                                    </div>
-                                    <div class="zht-bar-wrap"><div class="zht-bar" style="width:${barWidth}%"></div></div>`;
-                            }
-                            tip.style.display = 'block';
-                            tip.style.left = (event.clientX + 14) + 'px';
-                            tip.style.top  = (event.clientY - 10) + 'px';
-                            /* keep tooltip inside viewport */
-                            const tr = tip.getBoundingClientRect();
-                            if (tr.right  > window.innerWidth  - 8) tip.style.left = (event.clientX - tr.width - 14) + 'px';
-                            if (tr.bottom > window.innerHeight - 8) tip.style.top  = (event.clientY - tr.height + 10) + 'px';
-                        }
-                    });
-                    mapCanvas.addEventListener('mouseleave', () => {
-                        if (tip) tip.style.display = 'none';
-                        _lastHoveredZone = null;
-                        mapCanvas.style.cursor = 'grab';
-                    });
+                        });
+                    }
                 }
 
                 const dateResp = await timedFetch('/api/zone_dates', {}, 'zone-dates');
                 const dateData = await dateResp.json();
                 if (!dateData.error && Array.isArray(dateData.dates) && dateData.dates.length > 0) {
-                    zoneMapDates = dateData.dates;
+                    zoneMapDates = sortDatesChronologically(dateData.dates);
                     availableDates = zoneMapDates;
+                    reconcileManualDatesWithFlightDates();
                     const latestZonePickerDateId = getLatestDateId(zoneMapDates);
                     lastZonePickerDateId = latestZonePickerDateId || zoneMapDates[zoneMapDates.length - 1].date;
                     const timelineContainer = document.getElementById('timelineContainer');
@@ -4140,7 +4630,8 @@
             if (data.error) { showError(data.error); return; }
             if (data.dates.length === 0) { showError('No dates found for the selected zone.'); return; }
 
-            availableDates = data.dates;
+            availableDates = sortDatesChronologically(data.dates);
+            reconcileManualDatesWithFlightDates();
             const latestAvailableDateId = getLatestDateId(availableDates) || availableDates[availableDates.length - 1].date;
             const preferredZoneDateId = (lastZonePickerDateId && availableDates.some(d => d.date === lastZonePickerDateId))
                 ? lastZonePickerDateId
@@ -4207,11 +4698,15 @@
             siteKpiRateLoadingDateId = null;
             updateSelectedZoneBanner();
             currentDate = null;
-            availableDates = zoneMapDates;
+            availableDates = sortDatesChronologically(zoneMapDates);
+            reconcileManualDatesWithFlightDates();
             layoutData = null;
             selectedTrackerId = null;
             resetTrackerPreview();
             _resetZMTransform();
+            if (USE_LEAFLET_ZONE_MAP && zoneMeta) {
+                _initOrUpdateLeafletZoneMap(zoneMeta, true);
+            }
 
             const zonePicker = document.getElementById('zonePicker');
             const layoutWrapper = document.getElementById('layoutWrapper');
@@ -4445,7 +4940,7 @@
                 const concurrency = Math.max(1, parseInt(options?.concurrency, 10) || 2);
                 const reset = options?.reset !== false;
                 const token = options?.token || `${Date.now()}`;
-                if (reset) allDateSummaries = {};
+                if (reset) { allDateSummaries = {}; multiDateData = null; multiDateFetchPromise = null; }
                 const dateIds = availableDates.map(d => d.date);
                 let index = 0;
                 const workers = Array.from({ length: Math.min(concurrency, dateIds.length || 1) }, async () => {
@@ -4515,18 +5010,794 @@
             if (typeof echarts === 'undefined') return;
             if (tableSeries.length && !workingDaySeries.length) buildWorkingDaySeries();
             initializeCharts();
-            initializeDailyPieChart();
             if (window.progressChartInstance) window.progressChartInstance.resize();
             if (window.manpowerChartInstance) window.manpowerChartInstance.resize();
             if (window.productivityMhMwChartInstance) window.productivityMhMwChartInstance.resize();
             if (window.productivityMhModChartInstance) window.productivityMhModChartInstance.resize();
-            if (window.dailyPieChartInstance) window.dailyPieChartInstance.resize();
             updateProgressChart();
             updateManpowerChart();
             updateProductivityChart();
-            updateDailyPieChart();
             renderRateTable();
             renderProductivityTable();
+            fetchAndRenderMultiDateCharts();
+        }
+
+        async function fetchMultiDateData() {
+            if (multiDateData) return multiDateData;
+            if (multiDateFetchPromise) return multiDateFetchPromise;
+            multiDateFetchPromise = fetch('/api/multi_date_summary')
+                .then(r => r.ok ? r.json() : null)
+                .then(data => { multiDateData = data; multiDateFetchPromise = null; return data; })
+                .catch(() => { multiDateFetchPromise = null; return null; });
+            return multiDateFetchPromise;
+        }
+
+        async function fetchAndRenderMultiDateCharts() {
+            const data = await fetchMultiDateData();
+            if (!data || !data.dates || !data.dates.length) return;
+            initializeNewCharts();
+            renderMultiDateChartsForSelectedDate(data);
+            const chartsPanel = document.getElementById('chartsView');
+            if (chartsPanel && chartsPanel.classList.contains('active')) {
+                activateChartsTimelineMode();
+            }
+        }
+
+        function getChartsSelectedDate(data) {
+            const dates = data?.dates || [];
+            if (!dates.length) return null;
+            if (chartsSelectedDateId && dates.includes(chartsSelectedDateId)) return chartsSelectedDateId;
+            if (currentDate && dates.includes(currentDate)) {
+                chartsSelectedDateId = currentDate;
+                return chartsSelectedDateId;
+            }
+            chartsSelectedDateId = dates[dates.length - 1];
+            return chartsSelectedDateId;
+        }
+
+        function buildScopedMultiDateData(data, selectedDateId) {
+            if (!data || !data.dates || !data.dates.length) return data;
+            const idx = data.dates.indexOf(selectedDateId);
+            const endIdx = idx >= 0 ? idx : (data.dates.length - 1);
+            const scopedDates = data.dates.slice(0, endIdx + 1);
+            const scopedSummaries = {};
+            scopedDates.forEach(d => { scopedSummaries[d] = data.summaries?.[d] || {}; });
+            return { ...data, dates: scopedDates, summaries: scopedSummaries };
+        }
+
+        function setChartsSelectedDate(dateId, data = null) {
+            const source = data || multiDateData;
+            if (!source?.dates?.length || !dateId || !source.dates.includes(dateId)) return;
+            chartsSelectedDateId = dateId;
+            currentDate = dateId;
+            updateSelectedZoneBanner();
+        }
+
+        function renderMultiDateChartsForSelectedDate(data) {
+            const selectedDateId = getChartsSelectedDate(data);
+            setChartsSelectedDate(selectedDateId, data);
+            const scoped = buildScopedMultiDateData(data, selectedDateId);
+            updateProjectedCompletion(scoped);
+            updateWorkerPlanner(scoped);
+            updateConstructionStatusChart(scoped);
+            updateStageBreakdownChart(scoped);
+            updateCompletionTrendChart(scoped);
+            updateStageOverTimeChart(scoped);
+            updateCompletionRateChart(scoped);
+            updateInstallationRateChart(scoped);
+            updateProductivityRateChart(scoped);
+            updateStaffingOutputChart(scoped);
+            updateFlightOverFlightChart(scoped);
+            updateZonePerformanceChart(scoped);
+            updateDelaysStallsChart(scoped);
+            resizeAllNewCharts();
+        }
+
+        function initializeNewCharts() {
+            if (typeof echarts === 'undefined') return;
+            window.constructionStatusChartInstance = getOrCreateChartInstance('constructionStatusChart');
+            window.stageBreakdownChartInstance = getOrCreateChartInstance('stageBreakdownChart');
+            window.completionTrendChartInstance = getOrCreateChartInstance('completionTrendChart');
+            window.stageOverTimeChartInstance = getOrCreateChartInstance('stageOverTimeChart');
+            window.completionRateChartInstance = getOrCreateChartInstance('completionRateChart');
+            window.installationRateChartInstance = getOrCreateChartInstance('installationRateChart');
+            window.productivityRateChartInstance = getOrCreateChartInstance('productivityRateChart');
+            window.staffingOutputChartInstance = getOrCreateChartInstance('staffingOutputChart');
+            window.flightOverFlightChartInstance = getOrCreateChartInstance('flightOverFlightChart');
+            window.zonePerformanceChartInstance = getOrCreateChartInstance('zonePerformanceChart');
+            window.delaysStallsChartInstance = getOrCreateChartInstance('delaysStallsChart');
+        }
+
+        function resizeAllNewCharts() {
+            const instances = [
+                'constructionStatusChartInstance', 'stageBreakdownChartInstance',
+                'completionTrendChartInstance', 'stageOverTimeChartInstance',
+                'completionRateChartInstance', 'installationRateChartInstance',
+                'productivityRateChartInstance', 'staffingOutputChartInstance',
+                'flightOverFlightChartInstance', 'zonePerformanceChartInstance',
+                'delaysStallsChartInstance'
+            ];
+            instances.forEach(name => { if (window[name]) window[name].resize(); });
+        }
+
+        function mdStageLabel(key) {
+            const map = { pile: 'Piles', torque_tube: 'Torque Tubes', module_rails: 'Module Rails', solar_panel: 'Modules' };
+            return map[key] || key;
+        }
+        function mdStageColor(key) {
+            const colors = { pile: '#7E57C2', torque_tube: '#AB47BC', module_rails: '#42A5F5', solar_panel: '#1565C0' };
+            return colors[key] || '#666';
+        }
+        function mdStatusColor(key) {
+            return { completed: '#43a047', in_progress: '#fb8c00', not_started: '#b0bec5' }[key] || '#666';
+        }
+        function mdFormatDate(dateStr) {
+            if (!dateStr || dateStr.length !== 8) return dateStr;
+            return `${dateStr.slice(0,4)}-${dateStr.slice(4,6)}-${dateStr.slice(6,8)}`;
+        }
+        function mdDaysBetween(d1, d2) {
+            const a = new Date(mdFormatDate(d1)), b = new Date(mdFormatDate(d2));
+            return Math.max(1, Math.round((b - a) / 86400000));
+        }
+
+        /** Forward-filled manpower row from DB (`manpower_config`) on or before chart date. Keys are YYYY-MM-DD. */
+        function mdResolveManpowerForDate(manpower, dateId) {
+            if (!manpower || typeof manpower !== 'object') return { key: null, row: null };
+            const formatted = normalizeIsoDate(dateId);
+            if (!formatted) return { key: null, row: null };
+            const mpDates = Object.keys(manpower).sort();
+            let best = null;
+            for (const md of mpDates) {
+                if (md <= formatted) best = md; else break;
+            }
+            return best ? { key: best, row: manpower[best] } : { key: null, row: null };
+        }
+
+        function mdGetLatestSummary(data) {
+            const lastDate = data.dates[data.dates.length - 1];
+            return data.summaries[lastDate] || {};
+        }
+
+        function mdGetTotalTrackers(data) {
+            const fromJson = data.project_settings?.total_project_trackers;
+            if (fromJson && fromJson > 0) return fromJson;
+            const latest = mdGetLatestSummary(data);
+            return latest.totalTrackers || 0;
+        }
+
+        function mdGetStageCompleted(summary, stageKey) {
+            const sc = summary.stageProgressStatusCounts || {};
+            return sc[stageKey]?.completed || 0;
+        }
+        function mdGetStageInProgress(summary, stageKey) {
+            const sc = summary.stageProgressStatusCounts || {};
+            return sc[stageKey]?.in_progress || 0;
+        }
+        function mdGetStageNotStarted(summary, stageKey) {
+            const sc = summary.stageProgressStatusCounts || {};
+            return sc[stageKey]?.not_started || 0;
+        }
+
+        /** Per-stage status for trackers currently in that stage (each tracker counted once). */
+        function mdGetStageCurrentStatus(summary, stageKey, statusKey) {
+            const sc = summary.stageStatusCounts || {};
+            return sc[stageKey]?.[statusKey] || 0;
+        }
+
+        /** Sum of all current-stage buckets (each tracker should appear exactly once). */
+        function mdSumStageStatusCounts(ssc) {
+            if (!ssc) return 0;
+            let s = 0;
+            Object.values(ssc).forEach((st) => {
+                if (!st || typeof st !== 'object') return;
+                s += (st.completed || 0) + (st.in_progress || 0) + (st.not_started || 0);
+            });
+            return s;
+        }
+
+        /* ── PROJECTED SITE COMPLETION ── */
+        function updateProjectedCompletion(data) {
+            const body = document.getElementById('projectedCompletionBody');
+            const badges = document.getElementById('completionBadges');
+            const dateLabel = document.getElementById('projectedDateLabel');
+            if (!body) return;
+
+            const dates = data.dates;
+            const latest = mdGetLatestSummary(data);
+            const totalTrackers = mdGetTotalTrackers(data);
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const manpower = data.manpower?.manpower_config || {};
+            const lastDate = dates[dates.length - 1];
+            const lastDateFormatted = mdFormatDate(lastDate);
+
+            let maxEstDate = lastDateFormatted;
+            let bottleneckStage = null;
+            let bottleneckDays = 0;
+            let noCrewStages = [];
+            const rows = [];
+
+            stages.forEach(stageKey => {
+                const done = mdGetStageCompleted(latest, stageKey);
+                const left = totalTrackers - done;
+                let ratePerDay = 0;
+                if (dates.length >= 2) {
+                    const prev = data.summaries[dates[dates.length - 2]];
+                    if (prev) {
+                        const prevDone = mdGetStageCompleted(prev, stageKey);
+                        const days = mdDaysBetween(dates[dates.length - 2], lastDate);
+                        ratePerDay = days > 0 ? (done - prevDone) / days : 0;
+                    }
+                }
+
+                const { row: mpRow } = mdResolveManpowerForDate(manpower, lastDate);
+                const workers = mpRow ? (mpRow[stageKey] || 0) : 0;
+                const perWorker = workers > 0 ? ratePerDay / workers : 0;
+
+                let estDate = lastDateFormatted;
+                let daysLeft = Infinity;
+                if (left <= 0) {
+                    estDate = lastDateFormatted;
+                    daysLeft = 0;
+                } else if (ratePerDay > 0) {
+                    daysLeft = Math.ceil(left / ratePerDay);
+                    const d = new Date(lastDateFormatted);
+                    d.setDate(d.getDate() + daysLeft);
+                    estDate = d.toISOString().split('T')[0];
+                } else {
+                    estDate = 'N/A';
+                }
+
+                if (estDate !== 'N/A' && estDate > maxEstDate) {
+                    maxEstDate = estDate;
+                    bottleneckStage = stageKey;
+                    bottleneckDays = daysLeft;
+                }
+                if (workers === 0 && left > 0) noCrewStages.push(stageKey);
+
+                rows.push({ stageKey, done, left, ratePerDay, workers, perWorker, estDate });
+            });
+
+            body.innerHTML = rows.map(r => `<tr>
+                <td>${mdStageLabel(r.stageKey)}</td>
+                <td>${r.done}/${totalTrackers}</td>
+                <td>${r.left}</td>
+                <td>${r.ratePerDay.toFixed(1)}/d</td>
+                <td>${r.workers}</td>
+                <td>${r.perWorker.toFixed(2)}/w/d</td>
+                <td>${r.estDate}</td>
+            </tr>`).join('');
+
+            if (dateLabel) {
+                dateLabel.textContent = maxEstDate !== 'N/A'
+                    ? `Projected: ${new Date(maxEstDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} (~${bottleneckDays} days)`
+                    : 'Insufficient data for projection';
+            }
+            if (badges) {
+                let html = '';
+                if (bottleneckStage) html += `<span class="badge badge-bottleneck">BOTTLENECK ${mdStageLabel(bottleneckStage)}</span>`;
+                noCrewStages.forEach(s => { html += `<span class="badge badge-nocrew">NO CREW ${mdStageLabel(s)}</span>`; });
+                badges.innerHTML = html;
+            }
+        }
+
+        /* ── WORKER ALLOCATION PLANNER ── */
+        function updateWorkerPlanner(data) {
+            const body = document.getElementById('workerPlannerBody');
+            const totalLabel = document.getElementById('plannerTotalWorkers');
+            const dbHint = document.getElementById('plannerDbHint');
+            if (!body) return;
+
+            const latest = mdGetLatestSummary(data);
+            const totalTrackers = mdGetTotalTrackers(data);
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const manpower = data.manpower?.manpower_config || {};
+            const dates = data.dates;
+            const lastDate = dates[dates.length - 1];
+
+            const { key: dbManpowerKey, row: dbManpowerRow } = mdResolveManpowerForDate(manpower, lastDate);
+            if (dbHint) {
+                const chartDisp = mdFormatDate(lastDate);
+                dbHint.textContent = dbManpowerKey
+                    ? `Saved staffing (DB): ${dbManpowerKey} · chart date ${chartDisp}`
+                    : `No saved staffing on or before ${chartDisp} — defaults are 0 until you add rows in Settings`;
+            }
+
+            const plannerState = (window._plannerWorkers && typeof window._plannerWorkers === 'object') ? window._plannerWorkers : {};
+            let totalWorkers = 0;
+
+            body.innerHTML = stages.map(stageKey => {
+                const done = mdGetStageCompleted(latest, stageKey);
+                const left = totalTrackers - done;
+                let histProd = 0;
+                if (dates.length >= 2) {
+                    const prev = data.summaries[dates[dates.length - 2]];
+                    if (prev) {
+                        const prevDone = mdGetStageCompleted(prev, stageKey);
+                        const days = mdDaysBetween(dates[dates.length - 2], lastDate);
+                        const wHist = dbManpowerRow ? (dbManpowerRow[stageKey] || 0) : 0;
+                        if (wHist > 0 && days > 0) histProd = (done - prevDone) / days / wHist;
+                    }
+                }
+
+                const dbW = dbManpowerRow ? (dbManpowerRow[stageKey] || 0) : 0;
+                const workers = Object.prototype.hasOwnProperty.call(plannerState, stageKey)
+                    ? plannerState[stageKey]
+                    : dbW;
+                totalWorkers += workers;
+                const rate = workers * histProd;
+                const daysLeft = rate > 0 ? Math.ceil(left / rate) : Infinity;
+                const estDate = daysLeft < Infinity ? (() => { const d = new Date(mdFormatDate(lastDate)); d.setDate(d.getDate() + daysLeft); return d.toISOString().split('T')[0]; })() : 'N/A';
+
+                const stageIdx = stages.indexOf(stageKey);
+                let constraint = 'Own rate';
+                if (stageIdx > 0) {
+                    const prevStage = stages[stageIdx - 1];
+                    const prevDone = mdGetStageCompleted(latest, prevStage);
+                    if (prevDone < totalTrackers) constraint = `\u2191 Waiting for ${mdStageLabel(prevStage)}`;
+                }
+
+                return `<tr>
+                    <td>${mdStageLabel(stageKey)}</td>
+                    <td>${left}</td>
+                    <td>${histProd.toFixed(3)}</td>
+                    <td><input type="number" min="0" value="${workers}" data-stage="${stageKey}" class="planner-worker-input"></td>
+                    <td>${rate.toFixed(1)}/d</td>
+                    <td>${daysLeft < Infinity ? daysLeft : '\u221E'}</td>
+                    <td>${estDate}</td>
+                    <td style="font-size:10px;color:var(--txts)">${constraint}</td>
+                </tr>`;
+            }).join('');
+
+            if (totalLabel) totalLabel.textContent = `Total Workers: ${totalWorkers}`;
+
+            body.querySelectorAll('.planner-worker-input').forEach(input => {
+                input.addEventListener('change', () => {
+                    if (!window._plannerWorkers || typeof window._plannerWorkers !== 'object') window._plannerWorkers = {};
+                    window._plannerWorkers[input.dataset.stage] = parseInt(input.value, 10) || 0;
+                    updateWorkerPlanner(data);
+                });
+            });
+
+            const resetBtn = document.getElementById('resetWorkersBtn');
+            if (resetBtn && !resetBtn.dataset.bound) {
+                resetBtn.dataset.bound = 'true';
+                resetBtn.addEventListener('click', () => {
+                    window._plannerWorkers = null;
+                    updateWorkerPlanner(data);
+                });
+            }
+
+            const optimizeBtn = document.getElementById('optimizeWorkersBtn');
+            if (optimizeBtn && !optimizeBtn.dataset.bound) {
+                optimizeBtn.dataset.bound = 'true';
+                optimizeBtn.addEventListener('click', () => {
+                    const totalW = totalWorkers || 15;
+                    const perStage = Math.floor(totalW / stages.length);
+                    const remainder = totalW - perStage * stages.length;
+                    window._plannerWorkers = {};
+                    stages.forEach((s, i) => { window._plannerWorkers[s] = perStage + (i < remainder ? 1 : 0); });
+                    updateWorkerPlanner(data);
+                });
+            }
+        }
+
+        /* ── TRACKER CONSTRUCTION STATUS ──
+           Buckets are mutually exclusive and always sum to total project trackers (e.g. 5852 from settings).
+           Trackers missing from flight/CSV aggregation are counted as Not Started. */
+        function updateConstructionStatusChart(data) {
+            if (!window.constructionStatusChartInstance) return;
+            const latest = mdGetLatestSummary(data);
+            const total = mdGetTotalTrackers(data);
+            const ssc = latest.stageStatusCounts || {};
+            const completed = ssc.solar_panel?.completed || 0;
+            const pileNotStarted = ssc.pile?.not_started || 0;
+            const sumAssigned = mdSumStageStatusCounts(ssc);
+            const gap = Math.max(0, total - sumAssigned);
+            const notStarted = pileNotStarted + gap;
+            const inProgress = Math.max(0, total - completed - notStarted);
+
+            const subtitle = document.getElementById('constructionStatusSubtitle');
+            if (subtitle) subtitle.textContent = `${completed}/${total} completed`;
+
+            window.constructionStatusChartInstance.setOption({
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                grid: { left: '3%', right: '4%', top: '10%', bottom: '18%', containLabel: true },
+                xAxis: { type: 'category', data: ['Trackers'] },
+                yAxis: { type: 'value', min: 0, max: total },
+                series: [
+                    { name: 'Completed', type: 'bar', stack: 'status', data: [completed], itemStyle: { color: '#43a047' }, barWidth: '32%' },
+                    { name: 'In Progress', type: 'bar', stack: 'status', data: [inProgress], itemStyle: { color: '#fb8c00' }, barWidth: '32%' },
+                    { name: 'Not Started', type: 'bar', stack: 'status', data: [notStarted], itemStyle: { color: '#b0bec5' }, barWidth: '32%' }
+                ],
+                legend: { bottom: 0, data: ['Completed', 'In Progress', 'Not Started'] }
+            }, true);
+        }
+
+        /* ── STAGE BREAKDOWN ──
+           Each stage column shows completed/in_progress/not_started against the full
+           project tracker total. Any data gap is filled into not_started. */
+        function updateStageBreakdownChart(data) {
+            if (!window.stageBreakdownChartInstance) return;
+            const latest = mdGetLatestSummary(data);
+            const total = mdGetTotalTrackers(data);
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const categories = stages.map(mdStageLabel);
+            const completedData = [], inProgressData = [], notStartedData = [];
+            const columnTotals = [];
+
+            stages.forEach(s => {
+                const c = mdGetStageCompleted(latest, s);
+                const ip = mdGetStageInProgress(latest, s);
+                const ns = mdGetStageNotStarted(latest, s);
+                const accounted = c + ip + ns;
+                const gap = Math.max(0, total - accounted);
+                completedData.push(c);
+                inProgressData.push(ip);
+                notStartedData.push(ns + gap);
+                columnTotals.push(c + ip + ns + gap);
+            });
+
+            const yMax = Math.max(1, total);
+
+            const sub = document.getElementById('stageBreakdownSubtitle');
+            if (sub) {
+                sub.textContent = `Each stage is out of ${total.toLocaleString()} total trackers (missing records counted as Not Started).`;
+            }
+
+            function pctOfWhole(value) {
+                if (!value || !total) return '';
+                return `${value} (${Math.round(value / total * 100)}%)`;
+            }
+
+            window.stageBreakdownChartInstance.setOption({
+                tooltip: {
+                    trigger: 'axis',
+                    axisPointer: { type: 'shadow' },
+                    formatter(params) {
+                        if (!params || !params.length) return '';
+                        const di = params[0].dataIndex;
+                        const col = columnTotals[di] || 0;
+                        const lines = params.map(p => {
+                            const v = p.value;
+                            const pct = total && v ? Math.round(v / total * 100) : 0;
+                            return `${p.marker}${p.seriesName}: ${v} (${pct}% of ${total.toLocaleString()} total)`;
+                        });
+                        lines.push(`Column sum (this stage): ${col}`);
+                        lines.push(`Project total trackers: ${total.toLocaleString()}`);
+                        return `${params[0].axisValue}<br/>${lines.join('<br/>')}`;
+                    },
+                },
+                legend: { top: 0, data: ['Completed', 'In Progress', 'Not Started'] },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: categories },
+                yAxis: { type: 'value', name: `# Trackers (of ${total.toLocaleString()} total)`, max: yMax },
+                series: [
+                    { name: 'Completed', type: 'bar', stack: 'stage', data: completedData, itemStyle: { color: '#43a047' },
+                      label: { show: true, position: 'inside', fontSize: 10, formatter: p => pctOfWhole(p.value) } },
+                    { name: 'In Progress', type: 'bar', stack: 'stage', data: inProgressData, itemStyle: { color: '#fb8c00' },
+                      label: { show: true, position: 'inside', fontSize: 10, formatter: p => pctOfWhole(p.value) } },
+                    { name: 'Not Started', type: 'bar', stack: 'stage', data: notStartedData, itemStyle: { color: '#b0bec5' },
+                      label: { show: true, position: 'inside', fontSize: 10, formatter: p => pctOfWhole(p.value) } }
+                ]
+            }, true);
+        }
+
+        /* ── TRACKER COMPLETION TREND ── */
+        function updateCompletionTrendChart(data) {
+            if (!window.completionTrendChartInstance) return;
+            const xDates = data.dates.map(mdFormatDate);
+            const yValues = data.dates.map(d => {
+                const s = data.summaries[d];
+                return s?.stageProgressStatusCounts?.solar_panel?.completed || 0;
+            });
+
+            window.completionTrendChartInstance.setOption({
+                tooltip: { trigger: 'axis' },
+                grid: { left: '3%', right: '4%', top: 20, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates, boundaryGap: false },
+                yAxis: { type: 'value', name: 'Trackers Completed', min: 0 },
+                series: [{
+                    name: 'Completed Trackers',
+                    type: 'line',
+                    data: yValues,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    lineStyle: { width: 3, color: '#1565C0' },
+                    itemStyle: { color: '#1565C0' },
+                    areaStyle: { color: 'rgba(21,101,192,0.1)' }
+                }]
+            }, true);
+        }
+
+        /* ── STAGE COMPLETION OVER TIME ── */
+        function updateStageOverTimeChart(data) {
+            if (!window.stageOverTimeChartInstance) return;
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const xDates = data.dates.map(mdFormatDate);
+            const series = stages.map(stageKey => ({
+                name: mdStageLabel(stageKey),
+                type: 'line',
+                data: data.dates.map(d => mdGetStageCompleted(data.summaries[d] || {}, stageKey)),
+                smooth: true,
+                symbol: 'circle',
+                symbolSize: 6,
+                lineStyle: { width: 2, color: mdStageColor(stageKey) },
+                itemStyle: { color: mdStageColor(stageKey) }
+            }));
+
+            window.stageOverTimeChartInstance.setOption({
+                tooltip: { trigger: 'axis' },
+                legend: { top: 0, data: stages.map(mdStageLabel) },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xDates, boundaryGap: false },
+                yAxis: { type: 'value', name: '# Completed', min: 0 },
+                series
+            }, true);
+        }
+
+        /* ── TRACKER COMPLETION RATE ── */
+        function updateCompletionRateChart(data) {
+            if (!window.completionRateChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+            const xLabels = [], yValues = [];
+            for (let i = 1; i < dates.length; i++) {
+                const prev = data.summaries[dates[i - 1]];
+                const curr = data.summaries[dates[i]];
+                const prevC = prev?.stageProgressStatusCounts?.solar_panel?.completed || 0;
+                const currC = curr?.stageProgressStatusCounts?.solar_panel?.completed || 0;
+                const days = mdDaysBetween(dates[i - 1], dates[i]);
+                xLabels.push(mdFormatDate(dates[i]));
+                yValues.push(Number(((currC - prevC) / days).toFixed(2)));
+            }
+
+            window.completionRateChartInstance.setOption({
+                tooltip: { trigger: 'axis', formatter: p => `${p[0].axisValue}<br/>${p[0].value}/d` },
+                grid: { left: '3%', right: '4%', top: 20, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xLabels, boundaryGap: false },
+                yAxis: { type: 'value', name: 'trackers/day', min: 0 },
+                series: [{
+                    name: 'Rate',
+                    type: 'line',
+                    data: yValues,
+                    smooth: true,
+                    symbol: 'circle',
+                    symbolSize: 8,
+                    lineStyle: { width: 3, color: '#1565C0' },
+                    itemStyle: { color: '#1565C0' },
+                    areaStyle: { color: 'rgba(21,101,192,0.08)' }
+                }]
+            }, true);
+        }
+
+        /* ── INSTALLATION RATE PER STAGE ── */
+        function updateInstallationRateChart(data) {
+            if (!window.installationRateChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const xLabels = [];
+            for (let i = 1; i < dates.length; i++) xLabels.push(mdFormatDate(dates[i]));
+
+            const series = stages.map(stageKey => {
+                const yVals = [];
+                for (let i = 1; i < dates.length; i++) {
+                    const prev = mdGetStageCompleted(data.summaries[dates[i - 1]] || {}, stageKey);
+                    const curr = mdGetStageCompleted(data.summaries[dates[i]] || {}, stageKey);
+                    const days = mdDaysBetween(dates[i - 1], dates[i]);
+                    yVals.push(Number(((curr - prev) / days).toFixed(2)));
+                }
+                return {
+                    name: mdStageLabel(stageKey), type: 'line', data: yVals, smooth: true,
+                    symbol: 'circle', symbolSize: 6,
+                    lineStyle: { width: 2, color: mdStageColor(stageKey) },
+                    itemStyle: { color: mdStageColor(stageKey) }
+                };
+            });
+
+            window.installationRateChartInstance.setOption({
+                tooltip: { trigger: 'axis' },
+                legend: { top: 0, data: stages.map(mdStageLabel) },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xLabels, boundaryGap: false },
+                yAxis: { type: 'value', name: 'completions/day', min: 0 },
+                series
+            }, true);
+        }
+
+        /* ── PRODUCTIVITY RATE PER STAGE ── */
+        function updateProductivityRateChart(data) {
+            if (!window.productivityRateChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const manpower = data.manpower?.manpower_config || {};
+            const mpDates = Object.keys(manpower).sort();
+            const xLabels = [];
+            for (let i = 1; i < dates.length; i++) xLabels.push(mdFormatDate(dates[i]));
+
+            function getWorkersForDate(dateId, stageKey) {
+                const formatted = mdFormatDate(dateId);
+                let best = null;
+                for (const md of mpDates) { if (md <= formatted) best = md; else break; }
+                return best ? (manpower[best]?.[stageKey] || 0) : 0;
+            }
+
+            const series = stages.map(stageKey => {
+                const yVals = [];
+                for (let i = 1; i < dates.length; i++) {
+                    const prev = mdGetStageCompleted(data.summaries[dates[i - 1]] || {}, stageKey);
+                    const curr = mdGetStageCompleted(data.summaries[dates[i]] || {}, stageKey);
+                    const days = mdDaysBetween(dates[i - 1], dates[i]);
+                    const rate = days > 0 ? (curr - prev) / days : 0;
+                    const workers = getWorkersForDate(dates[i], stageKey);
+                    yVals.push(workers > 0 ? Number((rate / workers).toFixed(3)) : null);
+                }
+                return {
+                    name: mdStageLabel(stageKey), type: 'line', data: yVals, smooth: true,
+                    connectNulls: true, symbol: 'circle', symbolSize: 6,
+                    lineStyle: { width: 2, color: mdStageColor(stageKey) },
+                    itemStyle: { color: mdStageColor(stageKey) }
+                };
+            });
+
+            window.productivityRateChartInstance.setOption({
+                tooltip: { trigger: 'axis' },
+                legend: { top: 0, data: stages.map(mdStageLabel) },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xLabels, boundaryGap: false },
+                yAxis: { type: 'value', name: 'comp/worker/day', min: 0 },
+                series
+            }, true);
+        }
+
+        /* ── STAFFING VS OUTPUT ── */
+        function updateStaffingOutputChart(data) {
+            if (!window.staffingOutputChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+            const manpower = data.manpower?.manpower_config || {};
+            const mpDates = Object.keys(manpower).sort();
+            const xLabels = [];
+            const compRates = [], workerCounts = [];
+
+            for (let i = 1; i < dates.length; i++) {
+                xLabels.push(mdFormatDate(dates[i]));
+                const prev = data.summaries[dates[i - 1]];
+                const curr = data.summaries[dates[i]];
+                const prevC = prev?.stageProgressStatusCounts?.solar_panel?.completed || 0;
+                const currC = curr?.stageProgressStatusCounts?.solar_panel?.completed || 0;
+                const days = mdDaysBetween(dates[i - 1], dates[i]);
+                compRates.push(Number(((currC - prevC) / days).toFixed(2)));
+
+                const formatted = mdFormatDate(dates[i]);
+                let bestMp = null;
+                for (const md of mpDates) { if (md <= formatted) bestMp = md; else break; }
+                workerCounts.push(bestMp ? (manpower[bestMp]?.total || 0) : 0);
+            }
+
+            window.staffingOutputChartInstance.setOption({
+                tooltip: { trigger: 'axis' },
+                legend: { top: 0, data: ['Completions/day', 'Workers'] },
+                grid: { left: '3%', right: '8%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'category', data: xLabels },
+                yAxis: [
+                    { type: 'value', name: 'Completions/day', min: 0 },
+                    { type: 'value', name: 'Workers', min: 0, splitLine: { show: false } }
+                ],
+                series: [
+                    { name: 'Completions/day', type: 'bar', data: compRates, itemStyle: { color: '#42A5F5' }, barWidth: '40%' },
+                    { name: 'Workers', type: 'line', yAxisIndex: 1, data: workerCounts, smooth: true, symbol: 'circle', symbolSize: 8, lineStyle: { width: 2, color: '#FF7043' }, itemStyle: { color: '#FF7043' } }
+                ]
+            }, true);
+        }
+
+        /* ── FLIGHT-OVER-FLIGHT PROGRESS ── */
+        function updateFlightOverFlightChart(data) {
+            if (!window.flightOverFlightChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+            const stages = ['pile', 'torque_tube', 'module_rails', 'solar_panel'];
+            const prev = data.summaries[dates[dates.length - 2]] || {};
+            const curr = data.summaries[dates[dates.length - 1]] || {};
+            const prevDate = mdFormatDate(dates[dates.length - 2]);
+
+            const subtitle = document.getElementById('fofSubtitle');
+            if (subtitle) subtitle.textContent = `vs ${prevDate}`;
+
+            const completedDelta = [], inProgressDelta = [];
+            stages.forEach(s => {
+                completedDelta.push((mdGetStageCompleted(curr, s) - mdGetStageCompleted(prev, s)));
+                inProgressDelta.push((mdGetStageInProgress(curr, s) - mdGetStageInProgress(prev, s)));
+            });
+
+            window.flightOverFlightChartInstance.setOption({
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                legend: { top: 0, data: ['Completed', 'In Progress'] },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'value' },
+                yAxis: { type: 'category', data: stages.map(mdStageLabel) },
+                series: [
+                    { name: 'Completed', type: 'bar', stack: 'delta', data: completedDelta, itemStyle: { color: '#43a047' } },
+                    { name: 'In Progress', type: 'bar', stack: 'delta', data: inProgressDelta, itemStyle: { color: '#fb8c00' } }
+                ]
+            }, true);
+        }
+
+        /* ── ZONE PERFORMANCE ── */
+        function updateZonePerformanceChart(data) {
+            if (!window.zonePerformanceChartInstance) return;
+            const latest = mdGetLatestSummary(data);
+            const zones = latest.zone_summaries || [];
+            if (!zones.length) return;
+
+            const subtitle = document.getElementById('zonePerformanceSubtitle');
+            const avgPct = zones.reduce((s, z) => s + parseFloat(z.pct || 0), 0) / zones.length;
+            if (subtitle) subtitle.textContent = `avg ${avgPct.toFixed(0)}%`;
+
+            const zoneNames = zones.map(z => z.zone);
+            const pctValues = zones.map(z => parseFloat(z.pct || 0));
+
+            window.zonePerformanceChartInstance.setOption({
+                tooltip: { trigger: 'axis', formatter: p => `${p[0].name}: ${p[0].value}%` },
+                grid: { left: '3%', right: '4%', top: 10, bottom: '8%', containLabel: true },
+                xAxis: { type: 'value', name: '% Complete', max: 100 },
+                yAxis: { type: 'category', data: zoneNames, inverse: true },
+                series: [{
+                    type: 'bar',
+                    data: pctValues.map(v => ({ value: v, itemStyle: { color: v >= avgPct ? '#43a047' : '#42A5F5' } })),
+                    barWidth: '60%',
+                    label: { show: true, position: 'right', formatter: '{c}%', fontSize: 10 }
+                }],
+                markLine: { silent: true, data: [{ xAxis: avgPct, label: { formatter: `avg ${avgPct.toFixed(0)}%` } }] }
+            }, true);
+        }
+
+        /* ── DELAYS & STALLS ── */
+        function updateDelaysStallsChart(data) {
+            if (!window.delaysStallsChartInstance) return;
+            const dates = data.dates;
+            if (dates.length < 2) return;
+
+            const latest = mdGetLatestSummary(data);
+            const prev = data.summaries[dates[dates.length - 2]] || {};
+            const latestZones = latest.zone_summaries || [];
+            const prevZones = prev.zone_summaries || [];
+            const prevMap = {};
+            prevZones.forEach(z => { prevMap[z.zone] = z; });
+
+            const zoneNames = [], regression = [], staleCoverage = [], stalled = [];
+            let totalFlagged = 0;
+
+            latestZones.forEach(z => {
+                zoneNames.push(z.zone);
+                const pz = prevMap[z.zone];
+                const reg = pz ? Math.max(0, pz.completed - z.completed) : 0;
+                const stale = pz ? (z.completed === pz.completed && z.total === pz.total ? 1 : 0) : 0;
+                const stallCount = z.total - z.completed;
+                const stallVal = stallCount > 0 && stale ? stallCount : 0;
+                regression.push(reg);
+                staleCoverage.push(stale);
+                stalled.push(stallVal);
+                totalFlagged += reg + stale + (stallVal > 0 ? 1 : 0);
+            });
+
+            const subtitle = document.getElementById('delaysStallsSubtitle');
+            if (subtitle) subtitle.textContent = `${totalFlagged} flagged`;
+
+            window.delaysStallsChartInstance.setOption({
+                tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+                legend: { top: 0, data: ['Regression', 'Stale Coverage', 'Stalled'] },
+                grid: { left: '3%', right: '4%', top: 30, bottom: '8%', containLabel: true },
+                xAxis: { type: 'value' },
+                yAxis: { type: 'category', data: zoneNames, inverse: true },
+                series: [
+                    { name: 'Regression', type: 'bar', stack: 'issues', data: regression, itemStyle: { color: '#e53935' } },
+                    { name: 'Stale Coverage', type: 'bar', stack: 'issues', data: staleCoverage, itemStyle: { color: '#FF9800' } },
+                    { name: 'Stalled', type: 'bar', stack: 'issues', data: stalled, itemStyle: { color: '#FDD835' } }
+                ]
+            }, true);
         }
 
         function initializeCharts() {
@@ -4751,7 +6022,7 @@
             body.innerHTML = '';
             Object.keys(manpowerConfig).sort().forEach(dateStr => {
                 const cfg = cloneStageManpower(manpowerConfig[dateStr]);
-                const isManualRow = manualDates.includes(dateStr);
+                const isManualRow = isManualOnlyManpowerDate(dateStr);
                 manpowerConfig[dateStr] = cfg;
                 const tr = document.createElement('tr');
                 tr.innerHTML = `<td style="padding:4px 6px;border-bottom:1px solid #eee"><div style="display:flex;align-items:center;gap:6px;justify-content:space-between"><span>${dateStr}${isManualRow?' (manual)':''}</span>${isManualRow?`<button type="button" class="secondary-btn remove-manual-date-btn" data-date="${dateStr}" style="padding:2px 6px;font-size:11px">Remove</button>`:''}</div></td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right"><input type="number" min="0" value="${cfg.pile}" data-date="${dateStr}" data-key="pile" style="width:70px;font-size:11px;padding:2px 4px"></td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right"><input type="number" min="0" value="${cfg.torque_tube}" data-date="${dateStr}" data-key="torque_tube" style="width:70px;font-size:11px;padding:2px 4px"></td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right"><input type="number" min="0" value="${cfg.module_rails}" data-date="${dateStr}" data-key="module_rails" style="width:70px;font-size:11px;padding:2px 4px"></td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right"><input type="number" min="0" value="${cfg.solar_panel}" data-date="${dateStr}" data-key="solar_panel" style="width:70px;font-size:11px;padding:2px 4px"></td><td style="padding:4px 6px;border-bottom:1px solid #eee;text-align:right" class="manpower-total-cell" data-date="${dateStr}">${cfg.total}</td>`;
@@ -4786,35 +6057,6 @@
             if (tubesInput) { tubesInput.value = TUBES_PER_TRACKER.toString(); tubesInput.onchange = (e) => { const v = parseFloat(e.target.value); TUBES_PER_TRACKER = isNaN(v)||v<0?0:v; if (isZonePickerActive) { siteKpiLoaded = false; renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts); } }; }
             if (railsInput) { railsInput.value = RAILS_PER_TRACKER.toString(); railsInput.onchange = (e) => { const v = parseFloat(e.target.value); RAILS_PER_TRACKER = isNaN(v)||v<0?0:v; if (isZonePickerActive) { siteKpiLoaded = false; renderSiteStageKpiStrip(null, siteKpiStageCounts || siteStageCounts); } }; }
             bindBenchmarkSettingsInputs();
-        }
-
-        function initializeDailyPieChart() {
-            if (typeof echarts === 'undefined') return;
-            const pieEl = document.getElementById('dailyPieChart');
-            const selectEl = document.getElementById('dailyPieDateSelect');
-            if (!pieEl || !selectEl) return;
-            window.dailyPieChartInstance = getOrCreateChartInstance('dailyPieChart');
-            selectEl.innerHTML = '';
-            availableDates.forEach(d => { const opt = document.createElement('option'); opt.value = d.display; opt.textContent = d.display; selectEl.appendChild(opt); });
-            if (availableDates.length) { selectEl.value = availableDates[0].display; updateDailyPieChart(); }
-            if (selectEl.dataset.bound !== 'true') { selectEl.dataset.bound = 'true'; selectEl.addEventListener('change', () => { updateDailyPieChart(); }); }
-        }
-
-        function updateDailyPieChart() {
-            if (!window.dailyPieChartInstance || !availableDates.length) return;
-            const selectEl = document.getElementById('dailyPieDateSelect');
-            if (!selectEl) return;
-            const selectedDisp = selectEl.value;
-            const summary = allDateSummaries[selectedDisp];
-            if (!summary) { window.dailyPieChartInstance.clear(); const tl = document.getElementById('dailyPieTotal'); if (tl) tl.textContent = ''; return; }
-            const totalLabel = document.getElementById('dailyPieTotal');
-            if (totalLabel) totalLabel.textContent = `Total trackers: ${summary.totalTrackers || 0}`;
-            const data = stageDefinitions.map(stage => {
-                const countsByStatus = summary.stageStatusCounts[stage.key] || {};
-                const totalForStage = statusDefinitions.reduce((acc, st) => acc + (countsByStatus[st.key] || 0), 0);
-                return { name: stage.label, value: totalForStage, itemStyle: { color: getStageColor(stage.key) } };
-            }).filter(item => item.value > 0);
-            window.dailyPieChartInstance.setOption({ title: { text: `Stage distribution on ${selectedDisp}`, left: 'center', textStyle: { fontSize: 12 } }, tooltip: { trigger: 'item', formatter: '{b}: {c} ({d}%)' }, legend: { bottom: 0, type: 'scroll' }, series: [{ name: 'Stages', type: 'pie', radius: '60%', center: ['50%', '45%'], data }] });
         }
 
         function renderDailyTable() {
@@ -4924,7 +6166,14 @@
             const display = getDateDisplayForId(dateId);
             allDateSummaries[display] = normalized;
             const cached = dateDataCache.get(dateId) || {};
-            cached.summary = normalized;
+            if (HAS_ZONES && selectedZone) {
+                if (!cached.zoneSummaries || typeof cached.zoneSummaries !== 'object') {
+                    cached.zoneSummaries = {};
+                }
+                cached.zoneSummaries[selectedZone] = normalized;
+            } else {
+                cached.summary = normalized;
+            }
             dateDataCache.set(dateId, cached);
             return normalized;
         }
@@ -5081,7 +6330,13 @@
             const display = getDateDisplayForId(dateId);
             if (allDateSummaries[display]) return allDateSummaries[display];
             const cached = dateDataCache.get(dateId);
-            if (cached?.summary) {
+            const isZoneContext = Boolean(HAS_ZONES && selectedZone);
+            const cachedZoneSummary = isZoneContext ? cached?.zoneSummaries?.[selectedZone] : null;
+            if (isZoneContext && cachedZoneSummary) {
+                allDateSummaries[display] = cachedZoneSummary;
+                return cachedZoneSummary;
+            }
+            if (!isZoneContext && cached?.summary) {
                 allDateSummaries[display] = cached.summary;
                 return cached.summary;
             }
@@ -5280,6 +6535,9 @@
                 if (HAS_ZONES && !selectedZone) return;
                 const renderToken = ++latestLayoutRenderToken;
                 currentDate = dateStr;
+                if (multiDateData?.dates?.includes(dateStr)) {
+                    chartsSelectedDateId = dateStr;
+                }
                 updateSelectedZoneBanner();
                 const requestedLayoutKey = getLayoutCacheKey(dateStr);
                 if (preserveState && lastLoadedLayoutKey === requestedLayoutKey && layoutData) return;
@@ -5309,6 +6567,8 @@
                 updateFilterSummary();
                 if (!preserveState) resetTrackerPreview();
                 imageScaleFactor = data.image_scale_factor || 1.0;
+                imageScaleFactorX = data.image_scale_factor_x || imageScaleFactor;
+                imageScaleFactorY = data.image_scale_factor_y || imageScaleFactor;
                 restoreSelectedTracker();
                 if (!preserveState) document.getElementById('layoutContainer').innerHTML = '<div class="loading">Loading image</div>';
                 try {
@@ -5393,23 +6653,30 @@
             const zoomOutBtn  = document.getElementById('zoomOutBtn');
             const zoomResetBtn = document.getElementById('zoomResetBtn');
             const inZonePicker = () => HAS_ZONES && isZonePickerActive && !selectedZone;
+            const _leafletZoomIn  = () => { if (_leafletMap) _leafletMap.zoomIn(); };
+            const _leafletZoomOut = () => { if (_leafletMap) _leafletMap.zoomOut(); };
+            const _leafletReset   = () => {
+                if (!_leafletMap || !zoneMeta?.overall_bounds) return;
+                const ob = zoneMeta.overall_bounds;
+                _leafletMap.fitBounds([[ob.min_lat, ob.min_lon], [ob.max_lat, ob.max_lon]], { padding: [50, 50] });
+            };
             if (zoomInBtn) {
                 zoomInBtn.onclick = () => {
-                    if (inZonePicker()) { _zoomZoneMap(1.2); return; }
+                    if (inZonePicker()) { USE_LEAFLET_ZONE_MAP ? _leafletZoomIn() : _zoomZoneMap(1.2); return; }
                     zoomLevel = Math.min(zoomLevel * 1.2, 5.0);
                     updateCanvasTransform();
                 };
             }
             if (zoomOutBtn) {
                 zoomOutBtn.onclick = () => {
-                    if (inZonePicker()) { _zoomZoneMap(1 / 1.2); return; }
+                    if (inZonePicker()) { USE_LEAFLET_ZONE_MAP ? _leafletZoomOut() : _zoomZoneMap(1 / 1.2); return; }
                     zoomLevel = Math.max(zoomLevel / 1.2, 0.5);
                     updateCanvasTransform();
                 };
             }
             if (zoomResetBtn) {
                 zoomResetBtn.onclick = () => {
-                    if (inZonePicker()) { _resetZoneMapViewport(); return; }
+                    if (inZonePicker()) { USE_LEAFLET_ZONE_MAP ? _leafletReset() : _resetZoneMapViewport(); return; }
                     zoomLevel = 1.0;
                     panX = 0;
                     panY = 0;
@@ -5479,6 +6746,62 @@
         function renderTimelineDots() { /* handled by syncTimelineUI */ }
         function updateTimelinePosition() { updateTimelineWidth(); updateTimelineCurrent(); }
         
+        function isCoordsRenderable(coords) {
+            if (!coords) return false;
+            const vals = [coords.x, coords.y, coords.width, coords.height, coords.centerX, coords.centerY];
+            if (vals.some(v => !Number.isFinite(v))) return false;
+            if (coords.width < 1 || coords.height < 1) return false;
+            if (!canvas) return false;
+            // Box must genuinely overlap the canvas — no margin tolerance.
+            // This ensures off-screen degenerate boxes (from a stale/identity
+            // transform) fall through to fallbackLatLonToCanvas instead.
+            return (
+                coords.x + coords.width > 0 &&
+                coords.y + coords.height > 0 &&
+                coords.x < canvas.width &&
+                coords.y < canvas.height
+            );
+        }
+
+        function getBoundaryExtent(boundsMap) {
+            const keys = Object.keys(boundsMap || {});
+            if (!keys.length) return null;
+            let minLon = Infinity, maxLon = -Infinity, minLat = Infinity, maxLat = -Infinity;
+            keys.forEach((k) => {
+                const b = boundsMap[k];
+                if (!b) return;
+                minLon = Math.min(minLon, Number(b.min_lon));
+                maxLon = Math.max(maxLon, Number(b.max_lon));
+                minLat = Math.min(minLat, Number(b.min_lat));
+                maxLat = Math.max(maxLat, Number(b.max_lat));
+            });
+            if (!Number.isFinite(minLon) || !Number.isFinite(maxLon) || !Number.isFinite(minLat) || !Number.isFinite(maxLat)) return null;
+            return { minLon, maxLon, minLat, maxLat };
+        }
+
+        function fallbackLatLonToCanvas(boundary, layoutData) {
+            const ext = getBoundaryExtent(layoutData?.boundaries);
+            if (!ext || !image || !canvas || !scaleX || !scaleY) return null;
+            const lonRange = (ext.maxLon - ext.minLon) || 1e-9;
+            const latRange = (ext.maxLat - ext.minLat) || 1e-9;
+            const displayX = ((boundary.min_lon - ext.minLon) / lonRange) * image.width;
+            const displayW = ((boundary.max_lon - boundary.min_lon) / lonRange) * image.width;
+            const displayY = ((ext.maxLat - boundary.max_lat) / latRange) * image.height;
+            const displayH = ((boundary.max_lat - boundary.min_lat) / latRange) * image.height;
+            const canvasX = displayX / scaleX;
+            const canvasY = displayY / scaleY;
+            const canvasW = Math.max(displayW / scaleX, 2);
+            const canvasH = Math.max(displayH / scaleY, 2);
+            return {
+                x: canvasX,
+                y: canvasY,
+                width: canvasW,
+                height: canvasH,
+                centerX: canvasX + canvasW / 2,
+                centerY: canvasY + canvasH / 2,
+            };
+        }
+
         function latLonToCanvas(boundary, layoutData) {
             if (!layoutData.transform || !canvas || !image) return null;
             const [a, b, c, d, e, f] = layoutData.transform;
@@ -5490,11 +6813,21 @@
             const minCol = Math.min(...tifCoords.map(c => c.col)), maxCol = Math.max(...tifCoords.map(c => c.col));
             const minRow = Math.min(...tifCoords.map(c => c.row)), maxRow = Math.max(...tifCoords.map(c => c.row));
             const tifX = minCol, tifY = minRow, tifWidth = maxCol - minCol, tifHeight = maxRow - minRow;
-            const displayX = tifX / imageScaleFactor, displayY = tifY / imageScaleFactor;
-            const displayWidth = tifWidth / imageScaleFactor, displayHeight = tifHeight / imageScaleFactor;
+            const displayX = tifX / imageScaleFactorX, displayY = tifY / imageScaleFactorY;
+            const displayWidth = tifWidth / imageScaleFactorX, displayHeight = tifHeight / imageScaleFactorY;
             const canvasX = displayX / scaleX, canvasY = displayY / scaleY;
             const canvasWidth = displayWidth / scaleX, canvasHeight = displayHeight / scaleY;
-            return { x: canvasX, y: canvasY, width: Math.max(canvasWidth, 2), height: Math.max(canvasHeight, 2), centerX: canvasX + canvasWidth / 2, centerY: canvasY + canvasHeight / 2 };
+            const coords = {
+                x: canvasX,
+                y: canvasY,
+                width: Math.max(canvasWidth, 2),
+                height: Math.max(canvasHeight, 2),
+                centerX: canvasX + canvasWidth / 2,
+                centerY: canvasY + canvasHeight / 2,
+            };
+            if (isCoordsRenderable(coords)) return coords;
+            // Fallback for JPG-only flights where georeference can be imperfect.
+            return fallbackLatLonToCanvas(boundary, layoutData);
         }
         
         function getStageColorRGB(stage) { const colors = { 'pile': '#C896FF', 'torque_tube': '#800080', 'module_rails': '#87CEFA', 'solar_panel': '#00008B' }; return colors[stage?.toLowerCase().replace(/\s+/g, '_')] || '#666'; }
@@ -5504,10 +6837,43 @@
             if (!coords) return;
             const scaleFactor = 0.8, scaledWidth = coords.width * scaleFactor, scaledHeight = coords.height * scaleFactor;
             const scaledX = coords.centerX - scaledWidth / 2, scaledY = coords.centerY - scaledHeight / 2;
-            const color = isSelected ? '#FFFF00' : getStageColorRGB(stage);
-            ctx.fillStyle = color; ctx.globalAlpha = 0.3; ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
-            ctx.globalAlpha = 1.0; ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.setLineDash([]); ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            const color = isSelected ? '#FF00FF' : getStageColorRGB(stage);
+            // Make overlays clearly visible on dense aerial backgrounds.
+            ctx.fillStyle = color;
+            ctx.globalAlpha = isSelected ? 0.18 : 0.28;
+            ctx.fillRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            ctx.globalAlpha = 1.0;
+            ctx.strokeStyle = color;
+            ctx.lineWidth = isSelected ? 4 : 2.2;
+            if (isSelected) {
+                ctx.setLineDash([8, 5]);
+            } else {
+                ctx.setLineDash([]);
+            }
+            ctx.strokeRect(scaledX, scaledY, scaledWidth, scaledHeight);
+            ctx.setLineDash([]);
+            if (isSelected) {
+                ctx.beginPath();
+                ctx.fillStyle = '#FF00FF';
+                ctx.globalAlpha = 1.0;
+                ctx.arc(coords.centerX, coords.centerY, 5, 0, Math.PI * 2);
+                ctx.fill();
+            }
             coords.scaledRect = { x: scaledX, y: scaledY, width: scaledWidth, height: scaledHeight, centerX: coords.centerX };
+        }
+
+        function getScaledRect(coords, scaleFactor = 0.8) {
+            if (!coords) return null;
+            const scaledWidth = coords.width * scaleFactor;
+            const scaledHeight = coords.height * scaleFactor;
+            return {
+                x: coords.centerX - scaledWidth / 2,
+                y: coords.centerY - scaledHeight / 2,
+                width: scaledWidth,
+                height: scaledHeight,
+                centerX: coords.centerX,
+                centerY: coords.centerY,
+            };
         }
         
         function drawStatusCircle(ctx, coords, status) {
@@ -5529,10 +6895,75 @@
             ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
             const overlayToggle = document.getElementById('overlayToggle');
             const overlaysEnabled = overlayToggle && overlayToggle.checked;
+            const drawnBoundarySignatures = new Set();
+            const drawnRects = [];
+            const makeBoundarySignature = (coords) => {
+                if (!coords) return null;
+                // Guard against duplicate tracker IDs that resolve to the same box.
+                // Round to integers to collapse tiny floating-point jitter.
+                return [
+                    Math.round(coords.x),
+                    Math.round(coords.y),
+                    Math.round(coords.width),
+                    Math.round(coords.height),
+                ].join('|');
+            };
+            const toRect = (coords) => ({
+                x1: coords.x,
+                y1: coords.y,
+                x2: coords.x + coords.width,
+                y2: coords.y + coords.height,
+                w: coords.width,
+                h: coords.height,
+                cx: coords.x + (coords.width / 2),
+                cy: coords.y + (coords.height / 2),
+            });
+            const rectIou = (a, b) => {
+                const ix1 = Math.max(a.x1, b.x1);
+                const iy1 = Math.max(a.y1, b.y1);
+                const ix2 = Math.min(a.x2, b.x2);
+                const iy2 = Math.min(a.y2, b.y2);
+                const iw = Math.max(0, ix2 - ix1);
+                const ih = Math.max(0, iy2 - iy1);
+                const inter = iw * ih;
+                if (!inter) return 0;
+                const areaA = Math.max(0, a.w) * Math.max(0, a.h);
+                const areaB = Math.max(0, b.w) * Math.max(0, b.h);
+                if (!areaA || !areaB) return 0;
+                return inter / (areaA + areaB - inter);
+            };
+            const isDuplicateRect = (coords) => {
+                const sig = makeBoundarySignature(coords);
+                if (sig && drawnBoundarySignatures.has(sig)) return true;
+                const current = toRect(coords);
+                for (const prev of drawnRects) {
+                    // Thin vertical tracker boxes can look duplicated even when
+                    // their coordinates differ slightly. Catch those by center/size
+                    // proximity in canvas pixels before IoU check.
+                    const centerCloseX = Math.abs(current.cx - prev.cx) <= 3.0;
+                    const centerCloseY = Math.abs(current.cy - prev.cy) <= 5.0;
+                    const sizeCloseW = Math.abs(current.w - prev.w) <= 3.0;
+                    const sizeCloseH = Math.abs(current.h - prev.h) <= 6.0;
+                    if (centerCloseX && centerCloseY && sizeCloseW && sizeCloseH) {
+                        return true;
+                    }
+                    if (rectIou(current, prev) >= 0.88) return true;
+                }
+                if (sig) drawnBoundarySignatures.add(sig);
+                drawnRects.push(current);
+                return false;
+            };
             if (selectedTrackerId && layoutData.tracker_info && layoutData.boundaries) {
                 const info = layoutData.tracker_info[selectedTrackerId];
                 const boundary = layoutData.boundaries[selectedTrackerId];
-                if (info && boundary) { const canvasCoords = latLonToCanvas(boundary, layoutData); if (canvasCoords) { drawStageRectangle(ctx, canvasCoords, info.stage, true); if (overlaysEnabled) drawStatusCircle(ctx, canvasCoords, info.status); } }
+                if (info && boundary) {
+                    const canvasCoords = latLonToCanvas(boundary, layoutData);
+                    if (canvasCoords) {
+                        drawStageRectangle(ctx, canvasCoords, info.stage, true);
+                        if (overlaysEnabled) drawStatusCircle(ctx, canvasCoords, info.status);
+                        isDuplicateRect(canvasCoords);
+                    }
+                }
             }
             if (!overlaysEnabled) return;
             const stageFilter = selectedStage, statusFilter = selectedStatus;
@@ -5547,30 +6978,52 @@
                 if (statusFilter && trackerStatus !== statusFilter.toLowerCase().replace(/\s+/g, '_')) return;
                 const canvasCoords = latLonToCanvas(boundary, layoutData);
                 if (!canvasCoords) return;
+                if (isDuplicateRect(canvasCoords)) return;
                 drawStageRectangle(ctx, canvasCoords, info.stage, false);
                 drawStatusCircle(ctx, canvasCoords, info.status);
             });
         }
         
         async function handleClick(event) {
-            if (!canvas) return;
+            if (!canvas || !layoutData || !layoutData.boundaries) return;
             const canvasRect = canvas.getBoundingClientRect();
             if (!canvasRect.width || !canvasRect.height) return;
-            /* Use rendered canvas bounds so zoom/pan transforms are accounted for once. */
+
             const canvasX = (event.clientX - canvasRect.left) * (canvas.width / canvasRect.width);
             const canvasY = (event.clientY - canvasRect.top) * (canvas.height / canvasRect.height);
-            const displayX = canvasX * scaleX;
-            const displayY = canvasY * scaleY;
-            const originalX = displayX * imageScaleFactor;
-            const originalY = displayY * imageScaleFactor;
-            const tifX = originalX, tifY = originalY;
-            try {
-                const response = await timedFetch(getClickUrl(tifX, tifY), {}, 'click-lookup');
-                const result = await response.json();
-                if (result.error) { const previewDiv = document.getElementById('trackerPreview'); if (previewDiv) previewDiv.innerHTML = `<p class="tracker-preview-placeholder">${result.error}</p>`; return; }
-                if (result.tracker_id) await displayTracker(result.tracker_id);
-                else { const previewDiv = document.getElementById('trackerPreview'); if (previewDiv) previewDiv.innerHTML = '<p class="tracker-preview-placeholder">No tracker found at this location.</p>'; }
-            } catch (error) { const previewDiv = document.getElementById('trackerPreview'); if (previewDiv) previewDiv.innerHTML = `<p class="tracker-preview-placeholder">Error: ${error.message}</p>`; }
+
+            // Hit-test against the same scaled rectangle that we actually draw on canvas.
+            // This avoids selecting neighbors from overlapping raw bbox extents.
+            let foundId = null;
+            const hits = [];
+            for (const [trackerId, boundary] of Object.entries(layoutData.boundaries)) {
+                const coords = latLonToCanvas(boundary, layoutData);
+                if (!coords) continue;
+                const hitRect = getScaledRect(coords);
+                if (!hitRect) continue;
+                if (canvasX >= hitRect.x && canvasX <= hitRect.x + hitRect.width &&
+                    canvasY >= hitRect.y && canvasY <= hitRect.y + hitRect.height) {
+                    const dx = canvasX - hitRect.centerX;
+                    const dy = canvasY - hitRect.centerY;
+                    const dist2 = (dx * dx) + (dy * dy);
+                    hits.push({ trackerId, dist2, area: hitRect.width * hitRect.height });
+                }
+            }
+            if (hits.length) {
+                hits.sort((a, b) => {
+                    if (a.dist2 !== b.dist2) return a.dist2 - b.dist2;
+                    // Tie-break with smaller box first to prefer tighter match.
+                    return a.area - b.area;
+                });
+                foundId = hits[0].trackerId;
+            }
+
+            const previewDiv = document.getElementById('trackerPreview');
+            if (foundId) {
+                await displayTracker(foundId);
+            } else {
+                if (previewDiv) previewDiv.innerHTML = '<p class="tracker-preview-placeholder">No tracker found at this location.</p>';
+            }
         }
         
         function getStatusClass(status) { if (!status) return ''; return `status-${status.toLowerCase().replace(' ', '_')}`; }
@@ -5771,6 +7224,9 @@
             if (!mapArea) return;
 
             mapArea.addEventListener('click', function (e) {
+                // Leaflet mode: clicks are handled by layer event listeners directly
+                if (typeof USE_LEAFLET_ZONE_MAP !== 'undefined' && USE_LEAFLET_ZONE_MAP) return;
+
                 // Only intercept clicks that land directly on the block-map canvas
                 const canvas = document.getElementById('blockMapCanvas');
                 if (!canvas || e.target !== canvas) return;
@@ -5800,6 +7256,287 @@
             }, true /* capture phase */);
         });
     })();
+
+    // ═══════════════════════════════════════════════════════
+    //  PRINT REPORT
+    // ═══════════════════════════════════════════════════════
+
+    function _chartImg(instance, opts = {}) {
+        if (!instance) return null;
+        const width = Number(opts.width);
+        const height = Number(opts.height);
+        const shouldResize = Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
+        const prevWidth = instance.getWidth();
+        const prevHeight = instance.getHeight();
+        try {
+            if (shouldResize) {
+                instance.resize({ width, height, silent: true });
+                if (instance.getZr && instance.getZr().refreshImmediately) instance.getZr().refreshImmediately();
+            }
+            return instance.getDataURL({
+                type: 'png',
+                pixelRatio: opts.pixelRatio || 2,
+                backgroundColor: opts.backgroundColor || '#ffffff',
+            });
+        } catch (e) {
+            return null;
+        } finally {
+            if (shouldResize) {
+                instance.resize({ width: prevWidth, height: prevHeight, silent: true });
+                if (instance.getZr && instance.getZr().refreshImmediately) instance.getZr().refreshImmediately();
+            }
+        }
+    }
+
+    function _fmtReportDate(yyyymmdd) {
+        if (!yyyymmdd || yyyymmdd.length < 8) return yyyymmdd || '';
+        const y = yyyymmdd.slice(0, 4), m = yyyymmdd.slice(4, 6), d = yyyymmdd.slice(6, 8);
+        const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        return `${months[parseInt(m, 10) - 1]} ${parseInt(d, 10)}, ${y}`;
+    }
+
+    async function generateReport() {
+        const btn = document.getElementById('printReportBtn');
+        const origText = btn ? btn.innerHTML : '';
+        if (btn) btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Building…';
+
+        await new Promise(r => setTimeout(r, 60)); // allow ECharts to finish any pending renders
+
+        const halfChartSize = { width: 920, height: 480 };
+        const fullChartSize = { width: 1840, height: 520 };
+        const imgs = {
+            constructionStatus : _chartImg(window.constructionStatusChartInstance, halfChartSize),
+            stageBreakdown     : _chartImg(window.stageBreakdownChartInstance, halfChartSize),
+            completionTrend    : _chartImg(window.completionTrendChartInstance, fullChartSize),
+            stageOverTime      : _chartImg(window.stageOverTimeChartInstance, fullChartSize),
+            completionRate     : _chartImg(window.completionRateChartInstance, halfChartSize),
+            installationRate   : _chartImg(window.installationRateChartInstance, halfChartSize),
+            productivityRate   : _chartImg(window.productivityRateChartInstance, halfChartSize),
+            staffingOutput     : _chartImg(window.staffingOutputChartInstance, halfChartSize),
+            flightOverFlight   : _chartImg(window.flightOverFlightChartInstance, fullChartSize),
+            zonePerformance    : _chartImg(window.zonePerformanceChartInstance, halfChartSize),
+            delaysStalls       : _chartImg(window.delaysStallsChartInstance, halfChartSize),
+        };
+
+        const reportDateRaw  = chartsSelectedDateId
+                            || currentDate
+                            || (multiDateData?.dates?.length ? multiDateData.dates[multiDateData.dates.length - 1] : '')
+                            || (workingDaySeries.length ? workingDaySeries[workingDaySeries.length - 1].date : '');
+        const latestDateRaw  = reportDateRaw;
+        const latestDateDisp = _fmtReportDate(latestDateRaw);
+        const flightNum      = (multiDateData?.dates?.includes(latestDateRaw))
+            ? (multiDateData.dates.indexOf(latestDateRaw) + 1)
+            : (workingDaySeries.length || 1);
+        const now            = new Date();
+        const generatedStr   = now.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })
+                             + ', ' + now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
+        const completionTableHTML    = document.getElementById('projectedCompletionTable')?.outerHTML || '';
+        const workerPlannerTableHTML = document.getElementById('workerPlannerTable')?.outerHTML || '';
+        const projectedDateLabel     = document.getElementById('projectedDateLabel')?.textContent || '';
+        const completionBadgesHTML   = document.getElementById('completionBadges')?.innerHTML || '';
+        const plannerTotalWorkers    = document.getElementById('plannerTotalWorkers')?.textContent || '';
+        const fofSubtitle            = document.getElementById('fofSubtitle')?.textContent || '';
+        const zonePerformanceSubtitle= document.getElementById('zonePerformanceSubtitle')?.textContent || '';
+        const delaysStallsSubtitle   = document.getElementById('delaysStallsSubtitle')?.textContent || '';
+        const constructionSubtitle   = document.getElementById('constructionStatusSubtitle')?.textContent || '';
+
+        const html = _buildReportHTML({
+            projectName: PROJECT, latestDateDisp, flightNum, generatedStr,
+            projectedDateLabel, completionBadgesHTML, completionTableHTML,
+            workerPlannerTableHTML, plannerTotalWorkers,
+            fofSubtitle, zonePerformanceSubtitle, delaysStallsSubtitle, constructionSubtitle,
+            imgs,
+        });
+
+        const w = window.open('', '_blank');
+        if (!w) { alert('Please allow pop-ups for this page to generate the report.'); if (btn) btn.innerHTML = origText; return; }
+        w.document.write(html);
+        w.document.close();
+        w.addEventListener('load', () => setTimeout(() => w.print(), 300));
+
+        if (btn) btn.innerHTML = origText;
+    }
+
+    function _chartBlock(src, title, subtitle, fullWidth) {
+        if (!src) return `<div class="rpt-chart-placeholder ${fullWidth ? 'full' : ''}">${title} — not available</div>`;
+        return `
+        <div class="rpt-chart-wrap ${fullWidth ? 'full' : ''}">
+            <div class="rpt-chart-title">${title}${subtitle ? `<span class="rpt-chart-sub"> — ${subtitle}</span>` : ''}</div>
+            <img src="${src}" class="rpt-chart-img">
+        </div>`;
+    }
+
+    function _buildReportHTML(d) {
+        const tableStyles = `
+            table.rpt-table { width:100%; border-collapse:collapse; font-size:10px; margin-top:6px; }
+            table.rpt-table th { background:#1a2a4a; color:#fff; padding:4px 6px; text-align:left; font-weight:600; font-size:9px; text-transform:uppercase; letter-spacing:.4px; }
+            table.rpt-table td { padding:3px 6px; border-bottom:1px solid #eee; vertical-align:top; }
+            table.rpt-table tr:nth-child(even) td { background:#f7f8fb; }
+            table.rpt-table tr:last-child td { border-bottom:none; }
+        `;
+
+        // Clone table HTML and restyle for print (replace class="data-table" with class="rpt-table")
+        const completionTbl = d.completionTableHTML.replace(/class="data-table"/g, 'class="rpt-table"');
+        const plannerTbl    = d.workerPlannerTableHTML.replace(/class="data-table"/g, 'class="rpt-table"');
+
+        return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>${d.projectName} — Site Report</title>
+<style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; font-size: 11px; color: #1a1a2e; background: #fff; }
+    @page { size: A4 landscape; margin: 14mm 14mm 12mm; }
+
+    /* ── page breaks ── */
+    .rpt-page { page-break-after: always; }
+    .rpt-page:last-child { page-break-after: avoid; }
+
+    /* ── header ── */
+    .rpt-header { display: flex; justify-content: space-between; align-items: flex-start; padding-bottom: 8px; border-bottom: 2px solid #1a2a4a; margin-bottom: 12px; }
+    .rpt-header-left h1 { font-size: 18px; font-weight: 700; color: #1a2a4a; line-height: 1.2; }
+    .rpt-header-left .rpt-flight { font-size: 11px; color: #555; margin-top: 2px; }
+    .rpt-header-right { text-align: right; font-size: 10px; color: #888; line-height: 1.6; }
+    .rpt-page-label { font-size: 10px; color: #888; margin-top: 4px; }
+
+    /* ── section label ── */
+    .rpt-section-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .8px; color: #1a2a4a; border-bottom: 1px solid #ccd; padding-bottom: 3px; margin: 10px 0 8px; }
+
+    /* ── projected completion card ── */
+    .rpt-proj-date { font-size: 15px; font-weight: 700; color: #1a2a4a; margin: 4px 0; }
+    .rpt-badges { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+    .rpt-badges .badge, .rpt-badges [class*="badge"] { font-size: 9px; padding: 1px 6px; border-radius: 10px; }
+
+    /* ── tables ── */
+    ${tableStyles}
+
+    /* ── two-column layout for tables ── */
+    .rpt-tables-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 10px; }
+    .rpt-table-block h3 { font-size: 11px; font-weight: 700; color: #1a2a4a; margin-bottom: 4px; }
+    .rpt-table-meta { font-size: 9px; color: #666; margin-bottom: 2px; }
+
+    /* ── charts grid ── */
+    .rpt-charts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 6px; }
+    .rpt-chart-wrap { }
+    .rpt-chart-wrap.full { grid-column: span 2; }
+    .rpt-chart-title { font-size: 10px; font-weight: 700; color: #1a2a4a; margin-bottom: 3px; }
+    .rpt-chart-sub { font-weight: 400; color: #666; }
+    .rpt-chart-img { width: 100%; display: block; border: 1px solid #e8eaf0; border-radius: 4px; }
+    .rpt-chart-placeholder { font-size: 9px; color: #aaa; padding: 20px; text-align: center; border: 1px dashed #ddd; border-radius: 4px; }
+    .rpt-chart-placeholder.full { grid-column: span 2; }
+
+    /* ── footer ── */
+    .rpt-footer { margin-top: 10px; padding-top: 6px; border-top: 1px solid #e0e4ee; display: flex; justify-content: space-between; font-size: 8.5px; color: #aaa; }
+</style>
+</head>
+<body>
+
+<!-- ═══ PAGE 1: Summary & Tables ═══ -->
+<div class="rpt-page">
+    <div class="rpt-header">
+        <div class="rpt-header-left">
+            <h1>${d.projectName}</h1>
+            <div class="rpt-flight">Flight #${d.flightNum} — Latest &bull; ${d.latestDateDisp} &bull; Generated ${d.generatedStr}</div>
+        </div>
+        <div class="rpt-header-right">
+            <div style="font-size:12px;font-weight:700;color:#1a2a4a">Construction Progress Report</div>
+            <div>${d.latestDateDisp}</div>
+        </div>
+    </div>
+
+    <div class="rpt-section-label">Projected Site Completion</div>
+    <div class="rpt-proj-date">${d.projectedDateLabel}</div>
+    ${d.completionBadgesHTML ? `<div class="rpt-badges">${d.completionBadgesHTML}</div>` : ''}
+    ${completionTbl}
+
+    <div style="height:12px"></div>
+    <div class="rpt-section-label">Worker Allocation Planner</div>
+    ${d.plannerTotalWorkers ? `<div class="rpt-table-meta">${d.plannerTotalWorkers}</div>` : ''}
+    ${plannerTbl}
+
+    <div class="rpt-footer">
+        <span>${d.projectName} — Construction Progress Report — ${d.latestDateDisp}</span>
+        <span>Page 1 of 4</span>
+    </div>
+</div>
+
+<!-- ═══ PAGE 2: Overview Charts ═══ -->
+<div class="rpt-page">
+    <div class="rpt-header">
+        <div class="rpt-header-left">
+            <h1>${d.projectName}</h1>
+            <div class="rpt-flight">Flight #${d.flightNum} — ${d.latestDateDisp}</div>
+        </div>
+        <div class="rpt-header-right">
+            <div style="font-size:11px;font-weight:600;color:#555">Tracker Construction Status</div>
+            ${d.constructionSubtitle ? `<div>${d.constructionSubtitle}</div>` : ''}
+        </div>
+    </div>
+
+    <div class="rpt-charts-grid">
+        ${_chartBlock(d.imgs.constructionStatus, 'Tracker Construction Status', d.constructionSubtitle, false)}
+        ${_chartBlock(d.imgs.stageBreakdown, 'Stage Breakdown', '', false)}
+        ${_chartBlock(d.imgs.completionTrend, 'Tracker Completion Trend', '', true)}
+        ${_chartBlock(d.imgs.stageOverTime, 'Stage Completion Over Time', '', true)}
+    </div>
+
+    <div class="rpt-footer">
+        <span>${d.projectName} — Construction Progress Report — ${d.latestDateDisp}</span>
+        <span>Page 2 of 4</span>
+    </div>
+</div>
+
+<!-- ═══ PAGE 3: Rates & Productivity ═══ -->
+<div class="rpt-page">
+    <div class="rpt-header">
+        <div class="rpt-header-left">
+            <h1>${d.projectName}</h1>
+            <div class="rpt-flight">Flight #${d.flightNum} — ${d.latestDateDisp}</div>
+        </div>
+        <div class="rpt-header-right" style="font-size:11px;font-weight:600;color:#555">Rates &amp; Productivity</div>
+    </div>
+
+    <div class="rpt-charts-grid">
+        ${_chartBlock(d.imgs.completionRate,    'Tracker Completion Rate',    'trackers / day',            false)}
+        ${_chartBlock(d.imgs.installationRate,  'Installation Rate',          'completions / day',         false)}
+        ${_chartBlock(d.imgs.productivityRate,  'Productivity Rate',          'completions / worker / day',false)}
+        ${_chartBlock(d.imgs.staffingOutput,    'Staffing vs Output',         'workers &amp; completions/day', false)}
+    </div>
+
+    <div class="rpt-footer">
+        <span>${d.projectName} — Construction Progress Report — ${d.latestDateDisp}</span>
+        <span>Page 3 of 4</span>
+    </div>
+</div>
+
+<!-- ═══ PAGE 4: Site Health ═══ -->
+<div class="rpt-page">
+    <div class="rpt-header">
+        <div class="rpt-header-left">
+            <h1>${d.projectName}</h1>
+            <div class="rpt-flight">Flight #${d.flightNum} — ${d.latestDateDisp}</div>
+        </div>
+        <div class="rpt-header-right" style="font-size:11px;font-weight:600;color:#555">Site Health</div>
+    </div>
+
+    ${_chartBlock(d.imgs.flightOverFlight, 'Flight-over-Flight Progress', d.fofSubtitle, true)}
+    <div style="height:10px"></div>
+    <div class="rpt-charts-grid">
+        ${_chartBlock(d.imgs.zonePerformance, 'Zone Performance', d.zonePerformanceSubtitle, false)}
+        ${_chartBlock(d.imgs.delaysStalls,    'Delays &amp; Stalls', d.delaysStallsSubtitle,   false)}
+    </div>
+
+    <div class="rpt-footer">
+        <span>${d.projectName} — Construction Progress Report — ${d.latestDateDisp}</span>
+        <span>Page 4 of 4</span>
+    </div>
+</div>
+
+</body>
+</html>`;
+    }
 </script>
 </body>
 </html>

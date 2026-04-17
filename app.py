@@ -1,4 +1,5 @@
 from flask import Flask, render_template, send_file, jsonify, request, make_response, redirect
+import logging
 import os
 import json
 import csv
@@ -17,8 +18,61 @@ import hashlib
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 from functools import lru_cache
+import sys
+
+# Configure root logger so ingest/watcher activity is visible in the terminal.
+# Set LOG_LEVEL=DEBUG in the environment for more verbose output.
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Ensure the project root is on sys.path so `db.*` imports work regardless of
+# which directory the process is launched from.
+_APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+if _APP_ROOT not in sys.path:
+    sys.path.insert(0, _APP_ROOT)
+
+import atexit
+
+from db.db_service import init_pool, close_pool
+from db.repository import ProjectRepo, ManpowerRepo, TrackerRepo, FlightRepo, TrackerStatusRepo
+from db.file_watcher import start_watcher, stop_watcher
+from db.ingest_service import ingest_flight_folder, ingest_project, parse_folder
 
 app = Flask(__name__)
+
+# Initialise the PostgreSQL connection pool once at startup.
+init_pool(minconn=1, maxconn=10)
+
+
+def _clear_all_caches():
+    """Clear every LRU cache in the application.
+
+    Called by both /api/clear_cache and the file watcher after a successful
+    auto-ingest so the UI reflects new data immediately.
+    """
+    # These are defined later in this module; the lambda defers the lookup.
+    _cache_targets = [
+        "_available_zones_cached",
+        "_zone_bounds_cached",
+        "_all_dates_cached",
+        "_all_zone_stages_forward_fill_cached",
+        "_all_zone_available_dates_cached",
+        "_all_zone_stages_cached",
+        "get_tracker_boundaries_cached",
+        "build_sonrisa_layout_response_cached",
+        "build_default_layout_response_cached",
+        "get_tracker_info_cached",
+        "get_tracker_info_json_cached",
+    ]
+    import sys
+    module = sys.modules[__name__]
+    for name in _cache_targets:
+        fn = globals().get(name) or getattr(module, name, None)
+        if fn and hasattr(fn, "cache_clear"):
+            fn.cache_clear()
 
 # Configuration - paths relative to project root
 # For Railway deployment, use paths relative to app directory
@@ -88,6 +142,18 @@ _probe_cache: dict = {}
 _blob_container_client = None
 _blob_sdk_checked = False
 _blob_sdk_available = False
+
+
+# Start the filesystem watcher so new files in layout_data/ are automatically
+# pushed to PostgreSQL and LRU caches are invalidated.
+start_watcher(BASE_LAYOUT_DIR, _clear_all_caches)
+atexit.register(stop_watcher)
+
+
+@app.teardown_appcontext
+def teardown_db(exception):
+    """Return any borrowed DB connections to the pool at end of each request."""
+    pass  # pool manages connections globally; nothing per-request to release
 
 
 def log_timing(label, start_time, **context):
@@ -466,41 +532,15 @@ def atomic_write_json(file_path, payload):
             os.remove(tmp_path)
 
 
-@lru_cache(maxsize=64)
-def derive_project_tracker_defaults_cached(json_path, json_sig):
-    if not json_path or not os.path.exists(json_path):
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": None}
-
-    try:
-        data = read_json_file(json_path, default={})
-    except Exception:
-        return {"mw_per_tracker": None, "modules_per_tracker": None, "total_project_trackers": None, "project_json_path": os.path.basename(json_path)}
-
-    table_details = data.get("tableDetails", [])
-    total_project_trackers = len(table_details)
-
-    mw_per_tracker = None
-    modules_per_tracker = None
-    for table in table_details:
-        module_wattage = safe_float(table.get("moduleWattage"))
-        string_size = safe_float(table.get("stringSize"))
-        string_qty = safe_float(table.get("stringQty"))
-        if module_wattage and string_size and string_qty:
-            modules_per_tracker = int(round(string_size * string_qty))
-            mw_per_tracker = round((module_wattage * string_size * string_qty) / 1_000_000, 6)
-            break
-
-    return {
-        "mw_per_tracker": mw_per_tracker,
-        "modules_per_tracker": modules_per_tracker,
-        "total_project_trackers": total_project_trackers if total_project_trackers > 0 else None,
-        "project_json_path": os.path.basename(json_path),
-    }
+def derive_project_tracker_defaults_cached(project_name):
+    """Return tracker defaults from DB (replaces construction_AI.json parsing)."""
+    return TrackerRepo.get_tracker_defaults(project_name)
 
 
 @lru_cache(maxsize=128)
-def get_tracker_boundaries_cached(json_path, json_sig):
-    return load_tracker_boundaries(json_path)
+def get_tracker_boundaries_cached(project_name, _cache_buster=None):
+    """Return tracker boundaries from DB, keyed by project_name."""
+    return TrackerRepo.get_boundaries(project_name)
 
 
 @lru_cache(maxsize=256)
@@ -513,10 +553,42 @@ def get_tracker_info_json_cached(json_path, json_sig):
     return load_tracker_info_json(json_path)
 
 
-def get_tracker_info_from_sources(csv_path, csv_sig, status_json_path, status_json_sig):
-    if csv_path and csv_sig != (0, 0):
+def get_tracker_info_from_sources(
+    project_or_csv,
+    zone_or_sig,
+    csv_path=None,
+    csv_sig=None,
+    status_json_path=None,
+    status_json_sig=None,
+    folder_name_or_latest="latest",
+):
+    """Get tracker info, preferring DB lookup when project+zone are provided.
+
+    Two calling conventions supported:
+    1. New: (project_name, zone_code) — fetches from DB using latest available flight
+    2. Old (file-based fallback): (csv_path, csv_sig, status_json_path, status_json_sig)
+    """
+    # If called with project_name + zone_code (new convention)
+    if csv_path is None and status_json_path is None:
+        project_name = project_or_csv
+        zone_code = zone_or_sig
+        return TrackerStatusRepo.get_tracker_info_by_folder_zone(
+            project_name, folder_name_or_latest, zone_code
+        )
+
+    # Called with project+zone+file paths (hybrid — use DB, ignore file paths)
+    project_name = project_or_csv
+    zone_code = zone_or_sig
+    result = TrackerStatusRepo.get_tracker_info_by_folder_zone(
+        project_name, folder_name_or_latest, zone_code
+    )
+    if result:
+        return result
+
+    # Final fallback to file-based loading if DB returned nothing
+    if csv_path and csv_sig and csv_sig != (0, 0):
         return get_tracker_info_cached(csv_path, csv_sig)
-    if status_json_path and status_json_sig != (0, 0):
+    if status_json_path and status_json_sig and status_json_sig != (0, 0):
         return get_tracker_info_json_cached(status_json_path, status_json_sig)
     return {}
 
@@ -525,6 +597,40 @@ def get_tracker_info_from_sources(csv_path, csv_sig, status_json_path, status_js
 def get_tif_metadata_cached(tif_path, tif_sig):
     with rasterio.open(tif_path) as src:
         return list(src.transform), src.width, src.height, src.crs
+
+
+@lru_cache(maxsize=256)
+def get_synthetic_tif_metadata_cached(jpg_path, jpg_sig, min_lat, min_lon, max_lat, max_lon):
+    """Synthesize TIF-like metadata from a plain JPG + zone geographic bounds.
+
+    Used when a flight folder ships pre-rendered JPGs instead of raw GeoTIFFs.
+    Returns the same 4-tuple as get_tif_metadata_cached so callers are agnostic.
+    """
+    with Image.open(jpg_path) as img:
+        width, height = img.width, img.height
+    lon_range = (max_lon - min_lon) or 1e-6
+    lat_range = (max_lat - min_lat) or 1e-6
+    a = lon_range / width
+    e = -(lat_range / height)
+    synthetic_transform = [a, 0.0, min_lon, 0.0, e, max_lat]
+    return synthetic_transform, width, height, "EPSG:4326"
+
+
+def is_identity_or_missing_georef(transform, crs):
+    """Return True when raster metadata lacks usable georeferencing."""
+    if not crs:
+        return True
+    if not transform or len(transform) < 6:
+        return True
+    a, b, c, d, e, f = transform[:6]
+    return (
+        abs(a - 1.0) < 1e-12
+        and abs(b) < 1e-12
+        and abs(c) < 1e-12
+        and abs(d) < 1e-12
+        and abs(e - 1.0) < 1e-12
+        and abs(f) < 1e-12
+    )
 
 
 @lru_cache(maxsize=512)
@@ -573,196 +679,48 @@ def _get_dir_signature(dir_path):
 
 
 @lru_cache(maxsize=32)
-def _zone_bounds_cached(json_path, json_sig):
-    """Cache zone bounds parsing keyed by file signature."""
-    if not json_path or not os.path.exists(json_path):
-        return {}
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-    zone_bounds = {}
-    for entry in data.get("tableDetails", []):
-        zone = extract_zone_code_from_name(entry.get("tableName"))
-        if not zone:
-            continue
-        coords = [
-            entry.get("TopRightLatitude"),
-            entry.get("TopRightLongitude"),
-            entry.get("BottomLeftLatitude"),
-            entry.get("BottomLeftLongitude"),
-        ]
-        if any(v is None for v in coords):
-            continue
-        top_lat, right_lon, bottom_lat, left_lon = coords
-        min_lat = min(top_lat, bottom_lat)
-        max_lat = max(top_lat, bottom_lat)
-        min_lon = min(left_lon, right_lon)
-        max_lon = max(left_lon, right_lon)
-        if zone not in zone_bounds:
-            zone_bounds[zone] = [min_lat, min_lon, max_lat, max_lon]
-        else:
-            zb = zone_bounds[zone]
-            zb[0] = min(zb[0], min_lat)
-            zb[1] = min(zb[1], min_lon)
-            zb[2] = max(zb[2], max_lat)
-            zb[3] = max(zb[3], max_lon)
-    return zone_bounds
+def _zone_bounds_cached(project_name, _cache_buster=None):
+    """Return zone bounds from DB keyed by project_name."""
+    return TrackerRepo.get_zone_bounds(project_name)
 
 
 @lru_cache(maxsize=32)
-def _available_zones_cached(project_layout_dir, dir_sig):
-    """Cache available zone list keyed by directory signature."""
-    zones = set()
-    if not project_layout_dir or not os.path.exists(project_layout_dir):
-        return tuple()
-    for item in os.listdir(project_layout_dir):
-        item_path = os.path.join(project_layout_dir, item)
-        if not os.path.isdir(item_path):
-            continue
-        folder_zones, _, _ = parse_sonrisa_folder_info(item)
-        for zone in folder_zones:
-            zones.add(zone)
-    return tuple(sorted(zones))
+def _available_zones_cached(project_name, _cache_buster=None):
+    """Return sorted tuple of zone codes from DB."""
+    return tuple(FlightRepo.get_available_zones(project_name))
 
 
 @lru_cache(maxsize=32)
-def _all_dates_cached(project_layout_dir, dir_sig):
-    """Cache all zone-level dates keyed by directory signature."""
-    if not project_layout_dir or not os.path.exists(project_layout_dir):
-        return tuple()
-    dates = {}
-    for item in os.listdir(project_layout_dir):
-        item_path = os.path.join(project_layout_dir, item)
-        if not os.path.isdir(item_path):
-            continue
-        _, date_str, _ = parse_sonrisa_folder_info(item.strip())
-        if not date_str or not date_str.isdigit() or len(date_str) != 8:
-            continue
-        display = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-        dates[date_str] = {"date": date_str, "folder": item, "display": display}
-    return tuple(sorted(dates.values(), key=lambda x: x["date"]))
+def _all_dates_cached(project_name, _cache_buster=None):
+    """Return sorted tuple of { date, folder, display } dicts from DB."""
+    return tuple(FlightRepo.get_all_dates(project_name))
 
 
 @lru_cache(maxsize=64)
-def _all_zone_stages_cached(project_layout_dir, date_id, dir_sig):
-    """Compute ALL zone stages in a single directory scan, keyed by (dir, date, sig).
-    Returns a frozen dict-like tuple of (zone, stage) pairs for the given date.
-    This replaces the old per-zone approach that called os.listdir() 54 times."""
+def _all_zone_stages_cached(project_name, date_id, _cache_buster=None):
+    """Return { zone_code: majority_stage } for all zones at exactly date_id from DB."""
     calc_start = time.perf_counter()
-    if not project_layout_dir or not date_id or not os.path.exists(project_layout_dir):
+    if not project_name or not date_id:
         return {}
-    folder_zone_map = {}
-    for item in os.listdir(project_layout_dir):
-        item_path = os.path.join(project_layout_dir, item)
-        if not os.path.isdir(item_path):
-            continue
-        folder_zones, folder_date, _ = parse_sonrisa_folder_info(item.strip())
-        if folder_date == date_id and folder_zones:
-            for z in folder_zones:
-                if z not in folder_zone_map:
-                    folder_zone_map[z] = item_path
-    result = {}
-    for zone, folder_path in folder_zone_map.items():
-        csv_path = find_sonrisa_zone_csv(folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
-        tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
-        )
-        if not tracker_info:
-            continue
-        counts = {}
-        for info in tracker_info.values():
-            stage = (info.get("stage") or "").lower().replace(" ", "_")
-            if stage:
-                counts[stage] = counts.get(stage, 0) + 1
-        if counts:
-            result[zone] = max(counts.items(), key=lambda x: x[1])[0]
-    log_timing(
-        "zone_stage_calculation",
-        calc_start,
-        date=date_id,
-        folders=len(folder_zone_map),
-        zones=len(result),
-    )
+    result = TrackerStatusRepo.get_all_zone_stages(project_name, date_id)
+    log_timing("zone_stage_calculation", calc_start, date=date_id, zones=len(result))
     return result
 
 
-@lru_cache(maxsize=16)
-def _all_zone_available_dates_cached(project_layout_dir, dir_sig):
-    """One-shot scan returning {zone: [(date_id, folder_path), ...]} sorted ascending.
-    Used by forward-fill helpers to find each zone's most recent prior flight."""
-    if not project_layout_dir or not os.path.exists(project_layout_dir):
-        return {}
-    result = {}
-    for item in os.listdir(project_layout_dir):
-        item_path = os.path.join(project_layout_dir, item)
-        if not os.path.isdir(item_path):
-            continue
-        folder_zones, folder_date, folder_time = parse_sonrisa_folder_info(item.strip())
-        if not folder_date or not folder_zones:
-            continue
-        date_id = f"{folder_date}_{folder_time}" if folder_time else folder_date
-        for z in folder_zones:
-            if z not in result:
-                result[z] = []
-            result[z].append((date_id, item_path))
-    for z in result:
-        result[z].sort(key=lambda x: x[0])
-    return result
+def _all_zone_available_dates_cached(project_name):
+    """Return { zone_code: [(date_id, folder_name), ...] } from DB."""
+    return FlightRepo.get_all_zone_available_dates(project_name)
 
 
-def _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig):
-    """Return (most_recent_date_id, folder_path) for zone at or before date_id, or None."""
-    all_dates = _all_zone_available_dates_cached(project_layout_dir, dir_sig)
-    zone_dates = all_dates.get(zone, [])
-    best = None
-    for d, path in zone_dates:
-        if d <= date_id:
-            best = (d, path)
-        else:
-            break  # list is sorted ascending
-    return best
+def _zone_most_recent_folder_at_or_before(project_name, zone, date_id):
+    """Return (most_recent_date_id, folder_name) for zone at or before date_id, or None."""
+    return FlightRepo.get_latest_flight_for_zone(project_name, zone, date_id)
 
 
 @lru_cache(maxsize=64)
-def _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig):
-    """Like _all_zone_stages_cached but forward-fills every zone that has no data on
-    date_id from its most recently available prior flight date."""
-    exact = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
-    all_dates = _all_zone_available_dates_cached(project_layout_dir, dir_sig)
-
-    result = dict(exact)
-    for zone, zone_dates in all_dates.items():
-        if zone in result:
-            continue  # already have data for this exact date
-        # Find the most recent date <= date_id for this zone
-        best = None
-        for d, path in zone_dates:
-            if d <= date_id:
-                best = (d, path)
-            else:
-                break
-        if not best:
-            continue
-        _, folder_path = best
-        csv_path = find_sonrisa_zone_csv(folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
-        tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
-        )
-        if not tracker_info:
-            continue
-        counts = {}
-        for info in tracker_info.values():
-            stage = (info.get("stage") or "").lower().replace(" ", "_")
-            if stage:
-                counts[stage] = counts.get(stage, 0) + 1
-        if counts:
-            result[zone] = max(counts.items(), key=lambda x: x[1])[0]
-    return result
+def _all_zone_stages_forward_fill_cached(project_name, date_id, _cache_buster=None):
+    """Return { zone_code: majority_stage } forward-filled to date_id from DB."""
+    return TrackerStatusRepo.get_all_zone_stages_forward_filled(project_name, date_id)
 
 
 def normalize_status(status):
@@ -907,7 +865,7 @@ def compute_current_stage_from_installation_row(row):
 def normalize_zone_code(value):
     if not value:
         return None
-    match = ZONE_CODE_PATTERN.match(value.strip())
+    match = ZONE_CODE_PATTERN.match(str(value).strip())
     if not match:
         return None
     letter, number = match.group(1).upper(), match.group(2).zfill(2)
@@ -934,6 +892,12 @@ def normalize_tracker_id(tracker_id):
         t = t[:-15]
     if t.lower().endswith("_boundary"):
         t = t[:-9]
+    # Normalize zone-letter prefix: G→A so "G18T01R01" and "A18T01R01" map to
+    # the same canonical key.  Both can exist in dim_tracker when data was
+    # ingested under different zone-code conventions (same root cause as the
+    # "13" / "G13" zone_code duplicates).
+    if len(t) >= 2 and t[0].upper() == "G" and t[1].isdigit():
+        t = "A" + t[1:]
     return t
 
 
@@ -1064,12 +1028,7 @@ def get_sonrisa_all_dates(project_layout_dir):
 
 
 def get_available_projects():
-    if not os.path.exists(BASE_LAYOUT_DIR):
-        return []
-    return sorted([
-        name for name in os.listdir(BASE_LAYOUT_DIR)
-        if os.path.isdir(os.path.join(BASE_LAYOUT_DIR, name))
-    ])
+    return ProjectRepo.list_projects()
 
 
 def get_project_app_data_dir(project_layout_dir):
@@ -1109,8 +1068,7 @@ def get_project_date_entries(project):
     if not project_layout_dir or not os.path.isdir(project_layout_dir):
         return []
     if project_has_zones(project):
-        dir_sig = _get_dir_signature(project_layout_dir)
-        return list(_all_dates_cached(project_layout_dir, dir_sig))
+        return list(_all_dates_cached(project))
 
     dates = []
     for item in os.listdir(project_layout_dir):
@@ -1135,52 +1093,63 @@ def get_project_date_bounds(project):
 
 
 def derive_project_tracker_defaults(project_layout_dir, project_name):
-    json_path = find_project_metadata_json(project_layout_dir, project_name)
-    json_sig = optional_file_signature(json_path)
-    return derive_project_tracker_defaults_cached(json_path, json_sig)
+    return derive_project_tracker_defaults_cached(project_name)
 
 
 def build_project_settings_response(project_name):
-    project_layout_dir = get_layout_dir(project_name)
-    settings_path = get_project_settings_path(project_layout_dir)
-    stored = read_json_file(settings_path, default={}) if os.path.exists(settings_path) else {}
-    derived = derive_project_tracker_defaults(project_layout_dir, project_name)
-    derived_start_date, derived_end_date = get_project_date_bounds(project_name)
+    row = ProjectRepo.get_settings(project_name)
+    if not row:
+        return {
+            "project_name": project_name,
+            "working_days": DEFAULT_WORKING_DAYS[:],
+            "working_day_labels": working_day_labels(DEFAULT_WORKING_DAYS),
+            "hours_per_day": float(DEFAULT_HOURS_PER_DAY),
+            "mw_per_tracker": None,
+            "modules_per_tracker": None,
+            "project_start_date": None,
+            "project_end_date": None,
+            "created_at": None,
+            "updated_at": None,
+            "settings_exists": False,
+            "project_json_path": None,
+            "total_project_trackers": None,
+        }
 
-    working_days = stored.get("working_days", DEFAULT_WORKING_DAYS)
+    working_days = row.get("working_days") or DEFAULT_WORKING_DAYS
     try:
         normalized_working_days = normalize_working_days(working_days)
     except ValueError:
         normalized_working_days = DEFAULT_WORKING_DAYS[:]
 
-    hours_per_day = safe_float(stored.get("hours_per_day"))
+    hours_per_day = safe_float(row.get("hours_per_day"))
     if hours_per_day is None or hours_per_day <= 0:
         hours_per_day = float(DEFAULT_HOURS_PER_DAY)
 
-    settings = {
+    start_date = row.get("start_date")
+    end_date = row.get("end_date")
+    start_str = start_date.strftime("%Y-%m-%d") if hasattr(start_date, "strftime") else str(start_date) if start_date else None
+    end_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, "strftime") else str(end_date) if end_date else None
+
+    created_at = row.get("created_at")
+    updated_at = row.get("updated_at")
+    created_str = created_at.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(created_at, "strftime") else str(created_at) if created_at else None
+    updated_str = updated_at.strftime("%Y-%m-%dT%H:%M:%SZ") if hasattr(updated_at, "strftime") else str(updated_at) if updated_at else None
+
+    return {
         "project_name": project_name,
         "working_days": normalized_working_days,
         "working_day_labels": working_day_labels(normalized_working_days),
         "hours_per_day": hours_per_day,
-        "mw_per_tracker": (
-            derived["mw_per_tracker"]
-            if derived["mw_per_tracker"] is not None
-            else safe_float(stored.get("mw_per_tracker"))
-        ),
-        "modules_per_tracker": (
-            derived["modules_per_tracker"]
-            if derived["modules_per_tracker"] is not None
-            else safe_int(stored.get("modules_per_tracker"))
-        ),
-        "project_start_date": parse_optional_iso_date(stored.get("project_start_date")) or derived_start_date,
-        "project_end_date": parse_optional_iso_date(stored.get("project_end_date")) or derived_end_date,
-        "created_at": stored.get("created_at"),
-        "updated_at": stored.get("updated_at"),
-        "settings_exists": os.path.exists(settings_path),
-        "project_json_path": derived.get("project_json_path"),
-        "total_project_trackers": derived.get("total_project_trackers"),
+        "mw_per_tracker": float(row["mw_per_tracker"]) if row.get("mw_per_tracker") is not None else None,
+        "modules_per_tracker": row.get("modules_per_tracker"),
+        "project_start_date": start_str,
+        "project_end_date": end_str,
+        "created_at": created_str,
+        "updated_at": updated_str,
+        "settings_exists": True,
+        "project_json_path": None,
+        "total_project_trackers": row.get("total_project_trackers") or None,
     }
-    return settings
 
 
 def build_project_record(project_name):
@@ -1310,95 +1279,36 @@ def validate_manpower_data_payload(payload):
 def save_project_settings(project_name, payload, *, creating=False):
     project_layout_dir = get_layout_dir(project_name)
     if creating:
-        if os.path.exists(project_layout_dir):
+        if ProjectRepo.get_project_id(project_name):
             raise FileExistsError(f"Project already exists: {project_name}")
         os.makedirs(project_layout_dir, exist_ok=True)
-    elif not os.path.isdir(project_layout_dir):
-        raise FileNotFoundError(f"Project not found: {project_name}")
+        ProjectRepo.create_project(project_name, payload)
+    else:
+        if not ProjectRepo.get_project_id(project_name):
+            raise FileNotFoundError(f"Project not found: {project_name}")
+        # mw_per_tracker and modules_per_tracker: prefer DB-derived values from
+        # dim_tracker if present, otherwise use the submitted payload values.
+        defaults = TrackerRepo.get_tracker_defaults(project_name)
+        if defaults.get("mw_per_tracker") is not None:
+            payload = dict(payload)
+            payload["mw_per_tracker"] = defaults["mw_per_tracker"]
+        if defaults.get("modules_per_tracker") is not None:
+            payload = dict(payload)
+            payload["modules_per_tracker"] = defaults["modules_per_tracker"]
+        ProjectRepo.save_settings(project_name, payload)
 
-    ensure_project_scaffold(project_layout_dir)
-    settings_path = get_project_settings_path(project_layout_dir)
-    existing = read_json_file(settings_path, default={}) if os.path.exists(settings_path) else {}
-    derived = derive_project_tracker_defaults(project_layout_dir, project_name)
-    now_iso = utc_now_iso()
-
-    record = {
-        "project_name": project_name,
-        "working_days": payload["working_days"],
-        "hours_per_day": payload["hours_per_day"],
-        "mw_per_tracker": (
-            derived["mw_per_tracker"]
-            if derived["mw_per_tracker"] is not None
-            else payload.get("mw_per_tracker")
-            if payload.get("mw_per_tracker") is not None
-            else existing.get("mw_per_tracker")
-        ),
-        "modules_per_tracker": (
-            derived["modules_per_tracker"]
-            if derived["modules_per_tracker"] is not None
-            else payload.get("modules_per_tracker")
-            if payload.get("modules_per_tracker") is not None
-            else existing.get("modules_per_tracker")
-        ),
-        "project_start_date": payload.get("project_start_date"),
-        "project_end_date": payload.get("project_end_date"),
-        "created_at": existing.get("created_at") or now_iso,
-        "updated_at": now_iso,
-    }
-    atomic_write_json(settings_path, record)
     _project_has_zones_cache.pop(project_name, None)
     return build_project_settings_response(project_name)
 
 
 def build_manpower_data_response(project_name):
-    project_layout_dir = get_layout_dir(project_name)
-    data_path = get_project_manpower_data_path(project_layout_dir)
-    stored = read_json_file(data_path, default={}) if os.path.exists(data_path) else {}
-
-    try:
-        manual_dates = normalize_manual_dates(stored.get("manual_dates", []))
-    except ValueError:
-        manual_dates = []
-    try:
-        manpower_config = normalize_manpower_config(stored.get("manpower_config", {}))
-    except ValueError:
-        manpower_config = {}
-    try:
-        actual_stage_dates = normalize_actual_stage_dates(stored.get("actual_stage_dates", {}))
-    except ValueError:
-        actual_stage_dates = {stage_key: None for stage_key in PRODUCTIVITY_STAGE_KEYS}
-
-    return {
-        "project_name": project_name,
-        "manual_dates": manual_dates,
-        "manpower_config": manpower_config,
-        "actual_stage_dates": actual_stage_dates,
-        "created_at": stored.get("created_at"),
-        "updated_at": stored.get("updated_at"),
-        "data_exists": os.path.exists(data_path),
-    }
+    return ManpowerRepo.get_manpower(project_name)
 
 
 def save_manpower_data(project_name, payload):
-    project_layout_dir = get_layout_dir(project_name)
-    if not os.path.isdir(project_layout_dir):
+    if not ProjectRepo.get_project_id(project_name):
         raise FileNotFoundError(f"Project not found: {project_name}")
-
-    ensure_project_scaffold(project_layout_dir)
-    data_path = get_project_manpower_data_path(project_layout_dir)
-    existing = read_json_file(data_path, default={}) if os.path.exists(data_path) else {}
-    now_iso = utc_now_iso()
-
-    record = {
-        "project_name": project_name,
-        "manual_dates": payload["manual_dates"],
-        "manpower_config": payload["manpower_config"],
-        "actual_stage_dates": payload["actual_stage_dates"],
-        "created_at": existing.get("created_at") or now_iso,
-        "updated_at": now_iso,
-    }
-    atomic_write_json(data_path, record)
-    return build_manpower_data_response(project_name)
+    return ManpowerRepo.save_manpower(project_name, payload)
 
 
 def resolve_project_name(raw_project):
@@ -1454,56 +1364,18 @@ get_sonrisa_json_path = get_zone_json_path
 
 
 def project_has_zones(project):
-    """Check whether a project uses zone-based layout (has zone bounds in its JSON).
-    Result is cached per project to avoid repeated filesystem scans."""
+    """Check whether a project uses zone-based layout (zones exist in DB)."""
     if project in _project_has_zones_cache:
         return _project_has_zones_cache[project]
-    project_layout_dir = get_layout_dir(project)
-    json_path = get_zone_json_path(project_layout_dir)
-    if not json_path:
-        _project_has_zones_cache[project] = False
-        return False
-    json_sig = get_file_signature(json_path)
-    zone_bounds = _zone_bounds_cached(json_path, json_sig)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    available_zones = _available_zones_cached(project_layout_dir, dir_sig)
-    result = bool(zone_bounds) and len(available_zones) > 0
+    result = FlightRepo.has_zones(project)
     _project_has_zones_cache[project] = result
     return result
 
 
-def get_sonrisa_zone_bounds(json_path):
-    if not json_path or not os.path.exists(json_path):
-        return {}
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-    zone_bounds = {}
-    for entry in data.get("tableDetails", []):
-        zone = extract_zone_code_from_name(entry.get("tableName"))
-        if not zone:
-            continue
-        coords = [
-            entry.get("TopRightLatitude"),
-            entry.get("TopRightLongitude"),
-            entry.get("BottomLeftLatitude"),
-            entry.get("BottomLeftLongitude"),
-        ]
-        if any(v is None for v in coords):
-            continue
-        top_lat, right_lon, bottom_lat, left_lon = coords
-        min_lat = min(top_lat, bottom_lat)
-        max_lat = max(top_lat, bottom_lat)
-        min_lon = min(left_lon, right_lon)
-        max_lon = max(left_lon, right_lon)
-        if zone not in zone_bounds:
-            zone_bounds[zone] = [min_lat, min_lon, max_lat, max_lon]
-        else:
-            zb = zone_bounds[zone]
-            zb[0] = min(zb[0], min_lat)
-            zb[1] = min(zb[1], min_lon)
-            zb[2] = max(zb[2], max_lat)
-            zb[3] = max(zb[3], max_lon)
-    return zone_bounds
+def get_sonrisa_zone_bounds(project_name_or_json_path):
+    """Return zone bounds from DB for a project."""
+    project_name = project_name_or_json_path
+    return TrackerRepo.get_zone_bounds(project_name)
 
 
 def get_sonrisa_available_zones(project_layout_dir):
@@ -1653,13 +1525,8 @@ def get_sonrisa_zone_stage(project_layout_dir, zone, date_id=None):
 
     counts = {}
     for folder in date_folders:
-        csv_path = find_sonrisa_zone_csv(folder, zone)
-        status_json_path = find_sonrisa_zone_status_json(folder, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
-        tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
-        )
+        # folder is now a folder_name string; fetch tracker info from DB
+        tracker_info = get_tracker_info_from_sources(project_layout_dir, zone)
         if not tracker_info:
             continue
         for info in tracker_info.values():
@@ -2008,6 +1875,20 @@ def _rewrite_hls_manifest(manifest_text, zone, date_str, manifest_rel_path):
     return "\n".join(rewritten_lines) + ("\n" if manifest_text.endswith("\n") else "")
 
 
+def find_prerendered_zone_jpg(folder_path, zone):
+    """Return path to a pre-rendered zone web JPG if one exists in folder_path.
+
+    New-format flight folders ship G31_zone_web.jpg directly instead of raw TIFs.
+    """
+    if not folder_path or not os.path.isdir(folder_path):
+        return None
+    for alias in get_zone_aliases(zone):
+        candidate = os.path.join(folder_path, f"{alias.lower()}_zone_web.jpg")
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
 def find_sonrisa_zone_tif_fallback(project_layout_dir, zone):
     """Find zone TIFF and web JPG from another folder (e.g. G-style) when current folder (e.g. Flight-style) lacks them."""
     zone = normalize_zone_code(zone)
@@ -2189,25 +2070,9 @@ def find_project_json(project_layout_dir, project_name):
     return os.path.join(project_layout_dir, sorted(json_files)[0])
 
 
-def load_tracker_boundaries(json_path):
-    """Load tracker boundaries from JSON"""
-    with open(json_path, 'r') as f:
-        data = json.load(f)
-    boundaries = {}
-    for table in data.get('tableDetails', []):
-        tracker_id = table.get('tableName', '')
-        tr_lat = table.get('TopRightLatitude')
-        tr_lon = table.get('TopRightLongitude')
-        bl_lat = table.get('BottomLeftLatitude')
-        bl_lon = table.get('BottomLeftLongitude')
-        if tracker_id and None not in [tr_lat, tr_lon, bl_lat, bl_lon]:
-            boundaries[tracker_id] = {
-                'min_lon': min(bl_lon, tr_lon),
-                'max_lon': max(bl_lon, tr_lon),
-                'min_lat': min(bl_lat, tr_lat),
-                'max_lat': max(bl_lat, tr_lat)
-            }
-    return boundaries
+def load_tracker_boundaries(project_name):
+    """Load tracker boundaries from DB."""
+    return TrackerRepo.get_boundaries(project_name)
 
 
 def reproject_boundary(boundary, src_crs, dst_crs):
@@ -2459,11 +2324,24 @@ def build_sonrisa_layout_response_cached(
 ):
     calc_start = time.perf_counter()
     tif_meta_start = time.perf_counter()
-    transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
+    zone_bounds_map = _zone_bounds_cached(project)
+    zb = zone_bounds_map.get(zone) or [0.0, 0.0, 1.0, 1.0]
+    min_lat, min_lon, max_lat, max_lon = float(zb[0]), float(zb[1]), float(zb[2]), float(zb[3])
+    try:
+        transform, width, height, tif_crs = get_tif_metadata_cached(tif_path, tif_sig)
+        if is_identity_or_missing_georef(transform, tif_crs):
+            transform, width, height, tif_crs = get_synthetic_tif_metadata_cached(
+                tif_path, tif_sig, min_lat, min_lon, max_lat, max_lon
+            )
+    except Exception:
+        # tif_path is a pre-rendered JPG (new folder format) — synthesize transform from zone bounds.
+        transform, width, height, tif_crs = get_synthetic_tif_metadata_cached(
+            tif_path, tif_sig, min_lat, min_lon, max_lat, max_lon
+        )
     log_timing("layout_calc_tif_metadata", tif_meta_start, date=date_str, zone=zone)
 
     boundaries_start = time.perf_counter()
-    boundaries_raw = get_tracker_boundaries_cached(json_path, json_sig)
+    boundaries_raw = get_tracker_boundaries_cached(project)
     boundaries = {}
     for tracker_id, boundary in boundaries_raw.items():
         if normalize_zone_code(tracker_id) != zone:
@@ -2480,14 +2358,25 @@ def build_sonrisa_layout_response_cached(
     )
 
     tracker_info = {}
+    best = _zone_most_recent_folder_at_or_before(project, zone, date_str)
+    folder_name = best[1] if best else "latest"
     tracker_info_raw = get_tracker_info_from_sources(
-        csv_path, csv_sig, status_json_path, status_json_sig
+        project,
+        zone,
+        csv_path,
+        csv_sig,
+        status_json_path,
+        status_json_sig,
+        folder_name_or_latest=folder_name,
     )
     if tracker_info_raw:
         tracker_info_start = time.perf_counter()
         for tracker_id, info in tracker_info_raw.items():
             normalized_id = normalize_tracker_id(tracker_id)
-            if normalized_id:
+            # Only include tracker statuses for trackers that are present in the
+            # zone boundary map for this layout. This avoids cross-zone/status
+            # leakage if source data is inconsistent and keeps overlay colors aligned.
+            if normalized_id and normalized_id in boundaries:
                 tracker_info[normalized_id] = info
         log_timing(
             "layout_calc_tracker_info",
@@ -2502,6 +2391,15 @@ def build_sonrisa_layout_response_cached(
     if web_path and web_sig != (0, 0):
         display_size_start = time.perf_counter()
         display_width, display_height = get_image_dimensions_cached(web_path, web_sig)
+        # Keep overlay math aligned with /api/zone/image which may downscale the
+        # encoded response to WEB_IMAGE_MAX_DIMENSION.
+        if WEB_IMAGE_MAX_DIMENSION and max(display_width, display_height) > WEB_IMAGE_MAX_DIMENSION:
+            resize_ratio = min(
+                WEB_IMAGE_MAX_DIMENSION / display_width,
+                WEB_IMAGE_MAX_DIMENSION / display_height,
+            )
+            display_width = max(1, int(display_width * resize_ratio))
+            display_height = max(1, int(display_height * resize_ratio))
         log_timing(
             "layout_calc_display_dimensions",
             display_size_start,
@@ -2512,6 +2410,9 @@ def build_sonrisa_layout_response_cached(
         )
     if not display_width or not display_height:
         display_width, display_height, _ = get_display_dimensions(width, height, max_size=2000)
+
+    sfx = (width / display_width) if display_width else 1.0
+    sfy = (height / display_height) if display_height else 1.0
 
     response_data = {
         'boundaries': boundaries,
@@ -2524,7 +2425,9 @@ def build_sonrisa_layout_response_cached(
         'original_image_height': height,
         'display_image_width': display_width,
         'display_image_height': display_height,
-        'image_scale_factor': (width / display_width) if display_width else 1.0,
+        'image_scale_factor': sfx,
+        'image_scale_factor_x': sfx,
+        'image_scale_factor_y': sfy,
         'date': date_str
     }
     log_timing(
@@ -2561,7 +2464,7 @@ def build_default_layout_response_cached(
     log_timing("layout_calc_tif_metadata", tif_meta_start, date=date_str, project=project)
 
     boundaries_start = time.perf_counter()
-    boundaries = get_tracker_boundaries_cached(json_path, json_sig)
+    boundaries = get_tracker_boundaries_cached(project)
     log_timing(
         "layout_calc_boundaries",
         boundaries_start,
@@ -2606,6 +2509,13 @@ def build_default_layout_response_cached(
             height=display_height,
         )
 
+    sfx = scale_factor
+    sfy = (
+        (original_height / display_height)
+        if (display_height and original_height)
+        else scale_factor
+    )
+
     response_data = {
         'boundaries': boundaries,
         'tracker_info': tracker_info,
@@ -2617,7 +2527,9 @@ def build_default_layout_response_cached(
         'original_image_height': original_height,
         'display_image_width': display_width,
         'display_image_height': display_height,
-        'image_scale_factor': scale_factor,
+        'image_scale_factor': sfx,
+        'image_scale_factor_x': sfx,
+        'image_scale_factor_y': sfy,
         'date': date_str
     }
     if overlay_image_name:
@@ -2633,19 +2545,22 @@ def build_default_layout_response_cached(
     return response_data
 
 
-@lru_cache(maxsize=256)
-def build_date_summary_cached(csv_path, csv_sig, status_json_path, status_json_sig):
-    """Build lightweight per-date summary data from tracker status files."""
-    tracker_info = get_tracker_info_from_sources(
-        csv_path, csv_sig, status_json_path, status_json_sig
-    )
+def build_date_summary_cached(project_name, folder_name, zone_code, csv_path="", csv_sig=(0, 0), status_json_path="", status_json_sig=(0, 0)):
+    """Build lightweight per-date summary data from DB (with file fallback)."""
+    flight_id = FlightRepo.get_flight_id(project_name, folder_name) if folder_name else None
+    zone_id = FlightRepo.get_zone_id(project_name, zone_code) if zone_code else None
+    if flight_id and zone_id:
+        return TrackerStatusRepo.get_date_summary(flight_id, zone_id)
 
+    # Fallback: build from tracker_info dict
+    tracker_info = get_tracker_info_from_sources(
+        project_name, zone_code, csv_path or None, csv_sig, status_json_path or None, status_json_sig
+    )
     summary = {
         "stageStatusCounts": {},
         "totalTrackers": len(tracker_info),
         "trackerStages": [],
     }
-
     for info in tracker_info.values():
         stage_key = (info.get("stage") or "").lower().replace(" ", "_")
         status_key = (info.get("status") or "").lower().replace(" ", "_")
@@ -2656,7 +2571,6 @@ def build_date_summary_cached(csv_path, csv_sig, status_json_path, status_json_s
         if not summary["stageStatusCounts"][stage_key].get(status_key):
             summary["stageStatusCounts"][stage_key][status_key] = 0
         summary["stageStatusCounts"][stage_key][status_key] += 1
-
     return summary
 
 @app.route('/')
@@ -2776,19 +2690,12 @@ def get_date_summary(date_str):
         zone = normalize_zone_code(request.args.get('zone'))
         if not zone:
             return jsonify({'error': 'Zone required for this project'}), 400
-        dir_sig = _get_dir_signature(project_layout_dir)
-        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_str, dir_sig)
+        best = _zone_most_recent_folder_at_or_before(project, zone, date_str)
         if not best:
             return jsonify({'error': f'Date folder not found for {zone} {date_str}'}), 404
-        date_folder_path = best[1]
-        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
+        folder_name = best[1]
         calc_start = time.perf_counter()
-        summary = build_date_summary_cached(
-            csv_path or "", csv_sig, status_json_path or "", status_json_sig
-        )
+        summary = build_date_summary_cached(project, folder_name, zone)
         log_timing(
             "date_summary_calc",
             calc_start,
@@ -2801,29 +2708,9 @@ def get_date_summary(date_str):
         log_timing("get_date_summary", request_start, date=date_str, project=project, zone=zone)
         return response
 
-    date_folder = f"{project}{date_str}"
-    date_folder_path = os.path.join(project_layout_dir, date_folder)
-    if not os.path.exists(date_folder_path):
-        return jsonify({'error': f'Date folder not found: {date_folder}'}), 404
-
-    base_image_files = [f for f in os.listdir(date_folder_path)
-                       if f.endswith('.jpg')
-                       and not f.endswith('_overlay.jpg')
-                       and not f.endswith('_stage_overlay.jpg')
-                       and not f.endswith('_status_overlay.jpg')
-                       and not f.endswith('_stage_status_overlay.jpg')
-                       and not f.endswith('_web.jpg')]
-    if not base_image_files:
-        return jsonify({'error': f'Base image not found for date {date_str}'}), 404
-
-    base_image_name = base_image_files[0]
-    date_match = base_image_name.replace('.jpg', '')
-    csv_path = os.path.join(date_folder_path, f"{date_match}_tracker_stages.csv")
-    csv_sig = optional_file_signature(csv_path)
+    # Non-zone project: fall back to DB lookup by date
     calc_start = time.perf_counter()
-    summary = build_date_summary_cached(
-        csv_path if csv_sig != (0, 0) else "", csv_sig, "", (0, 0)
-    )
+    summary = build_date_summary_cached(project, None, None)
     log_timing(
         "date_summary_calc",
         calc_start,
@@ -2920,34 +2807,42 @@ def get_layout_data(date_str):
                 tif_path = fallback_tif_path
                 web_path = fallback_web_path
             else:
-                return jsonify({'error': 'Zone TIFF not found'}), 404
+                # New folder format: no TIF available; use pre-rendered JPG as image source.
+                prerendered = find_prerendered_zone_jpg(date_folder_path, zone)
+                if not prerendered:
+                    return jsonify({'error': 'Zone TIFF not found'}), 404
+                tif_path = prerendered
+                web_path = prerendered
+                zone_tif = os.path.basename(prerendered)
         else:
             tif_path = os.path.join(date_folder_path, zone_tif)
 
-        # Load JSON and CSV
-        json_path = get_zone_json_path(project_layout_dir)
-        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
-
-        if not json_path or not os.path.exists(json_path):
-            return jsonify({'error': 'JSON file not found'}), 404
-
         tif_meta_start = time.perf_counter()
         tif_sig = get_file_signature(tif_path)
-        _, _, _, _ = get_tif_metadata_cached(tif_path, tif_sig)
+        # Warm the cache; for GeoTIFFs rasterio reads metadata; for JPGs the
+        # synthetic-transform path in build_sonrisa_layout_response_cached handles it.
+        try:
+            _, _, _, _ = get_tif_metadata_cached(tif_path, tif_sig)
+        except Exception:
+            pass
         log_timing("layout_tif_metadata", tif_meta_start, date=date_str, zone=zone, tif=zone_tif)
 
-        json_sig = get_file_signature(json_path)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
+        # json_path/json_sig are kept for lru_cache key compatibility but boundaries come from DB
+        json_path = ""
+        json_sig = (0, 0)
+        csv_path = ""
+        csv_sig = (0, 0)
+        status_json_path = ""
+        status_json_sig = (0, 0)
 
-        if not zone_tif or 'web_path' not in dir() or not web_path:
+        if not web_path:
             web_path = get_or_create_sonrisa_web_jpg(
                 os.path.dirname(tif_path), zone_tif, max_dimension=4000
             )
         web_sig = optional_file_signature(web_path)
         layout_etag = build_etag(
             "layout",
+            "tracker_info_v2",
             project,
             date_str,
             zone,
@@ -3040,6 +2935,7 @@ def get_layout_data(date_str):
 
     layout_etag = build_etag(
         "layout",
+        "tracker_info_v2",
         project,
         date_str,
         tif_sig,
@@ -3178,11 +3074,8 @@ def get_zones():
     project_layout_dir = get_layout_dir(project)
     date_id = request.args.get("date")
     setup_start = time.perf_counter()
-    json_path = get_zone_json_path(project_layout_dir)
-    json_sig = get_file_signature(json_path) if json_path else (0, 0)
-    zone_bounds = _zone_bounds_cached(json_path, json_sig)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    zone_bounds = _zone_bounds_cached(project)
+    available_zones = list(_available_zones_cached(project))
     log_timing(
         "zones_calc_setup",
         setup_start,
@@ -3200,7 +3093,7 @@ def get_zones():
     if date_id:
         stage_start = time.perf_counter()
         # Forward-fill: zones without data on date_id use their most recent prior flight.
-        zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
+        zone_stage = _all_zone_stages_forward_fill_cached(project, date_id)
         available_zones = [z for z in available_zones if zone_stage.get(z)]
         log_timing(
             "zones_calc_stage_filter",
@@ -3225,7 +3118,8 @@ def get_zones():
         elif is_blob_video_mount_backend_enabled():
             zone_video_map = discover_zone_videos_blob_mount_cached(project, date_id)
         else:
-            zone_video_map = discover_zone_videos_cached(project_layout_dir, date_id, dir_sig)
+            _dir_sig = _get_dir_signature(project_layout_dir)
+            zone_video_map = discover_zone_videos_cached(project_layout_dir, date_id, _dir_sig)
     else:
         zone_video_map = {}
     serialize_start = time.perf_counter()
@@ -3268,14 +3162,11 @@ def get_block_map():
         os.path.join(project_layout_dir, "block_map.jpg"),
     ]
     existing_map = next((p for p in bg_candidates if os.path.exists(p)), None)
-    json_path = get_zone_json_path(project_layout_dir)
-    json_sig = get_file_signature(json_path) if json_path else (0, 0)
-    zone_bounds = _zone_bounds_cached(json_path, json_sig)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    zone_bounds = _zone_bounds_cached(project)
+    available_zones = list(_available_zones_cached(project))
     zone_colors = {}
     if date_id:
-        zone_stage = _all_zone_stages_cached(project_layout_dir, date_id, dir_sig)
+        zone_stage = _all_zone_stages_cached(project, date_id)
         for zone, stage in zone_stage.items():
             color = STAGE_COLORS.get(stage)
             if color:
@@ -3331,8 +3222,7 @@ def get_block_map_bg():
         response.headers["Content-Length"] = str(len(img_bytes))
         apply_cache_headers(response, etag, max_age=0)
     else:
-        json_path = get_zone_json_path(project_layout_dir)
-        zone_bounds = get_sonrisa_zone_bounds(json_path)
+        zone_bounds = get_sonrisa_zone_bounds(project)
         if not zone_bounds:
             return jsonify({'error': 'No zone data for this project'}), 404
         overall = compute_zone_overall_bounds(zone_bounds)
@@ -3359,8 +3249,7 @@ def get_site_date_summary(date_str):
     date_str = date_str.replace('-', '')
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    available_zones = list(_available_zones_cached(project))
 
     agg_tracker_stages = []
     agg_stage_status_counts = {}
@@ -3368,16 +3257,12 @@ def get_site_date_summary(date_str):
     total_trackers = 0
 
     for zone in available_zones:
-        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_str, dir_sig)
+        best = _zone_most_recent_folder_at_or_before(project, zone, date_str)
         if not best:
             continue
-        date_folder_path = best[1]
-        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
+        folder_name = best[1]
         tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
+            project, zone, None, (0, 0), None, (0, 0), folder_name_or_latest=folder_name
         )
         if not tracker_info:
             continue
@@ -3408,14 +3293,145 @@ def get_site_date_summary(date_str):
     return jsonify(summary)
 
 
+@app.route('/api/multi_date_summary')
+def get_multi_date_summary():
+    """Return site-level summaries for ALL available flight dates in one payload.
+    Used by trend / rate / productivity charts that need cross-date data."""
+    request_start = time.perf_counter()
+    project = get_project_from_request()
+    project_layout_dir = get_layout_dir(project)
+    all_dates = list(_all_dates_cached(project))
+    available_zones = list(_available_zones_cached(project))
+
+    summaries = {}
+    for date_obj in all_dates:
+        date_id = date_obj["date"]
+        zone_stage = _all_zone_stages_forward_fill_cached(project, date_id)
+        active_zones = [z for z in available_zones if zone_stage.get(z)]
+
+        agg_stage_status = {}
+        agg_stage_progress = _init_stage_status_matrix()
+        zone_rows = []
+        total_trackers = 0
+
+        for zone in active_zones:
+            best = _zone_most_recent_folder_at_or_before(project, zone, date_id)
+            if not best:
+                continue
+            folder_name = best[1]
+            tracker_info = get_tracker_info_from_sources(
+                project, zone, folder_name_or_latest=folder_name
+            )
+            if not tracker_info:
+                continue
+
+            total = len(tracker_info)
+            total_trackers += total
+            completed = 0
+            for info in tracker_info.values():
+                stage = (info.get("stage") or "").lower().replace(" ", "_")
+                status = (info.get("status") or "").lower().replace(" ", "_")
+                status_norm = (status or "not_started").strip().lower().replace(" ", "_") or "not_started"
+                if stage == "solar_panel" and status_norm == "completed":
+                    completed += 1
+                if not stage:
+                    continue
+                if stage not in agg_stage_status:
+                    agg_stage_status[stage] = {}
+                agg_stage_status[stage][status_norm] = agg_stage_status[stage].get(status_norm, 0) + 1
+                _accumulate_normalized_stage_progress(agg_stage_progress, stage, status_norm)
+
+            pct = (completed / total * 100) if total > 0 else 0.0
+            zone_rows.append({"zone": zone, "total": total, "completed": completed, "pct": f"{pct:.1f}"})
+
+        summaries[date_id] = {
+            "stageStatusCounts": agg_stage_status,
+            "stageProgressStatusCounts": agg_stage_progress,
+            "totalTrackers": total_trackers,
+            "zone_summaries": zone_rows,
+        }
+
+    manpower = build_manpower_data_response(project)
+    project_settings = build_project_settings_response(project)
+
+    response = jsonify({
+        "dates": [d["date"] for d in all_dates],
+        "date_displays": {d["date"]: d["display"] for d in all_dates},
+        "summaries": summaries,
+        "manpower": manpower,
+        "project_settings": project_settings,
+    })
+    log_timing("get_multi_date_summary", request_start, project=project, dates=len(all_dates))
+    return response
+
+
+@app.route('/api/clear_cache', methods=['POST'])
+def clear_cache():
+    """Clear all LRU caches so fresh data is served immediately after data migrations."""
+    _clear_all_caches()
+    return jsonify({'status': 'ok', 'message': 'All caches cleared'})
+
+
+@app.route('/api/ingest', methods=['POST'])
+def trigger_ingest():
+    """Manually trigger a full re-scan of layout_data and push to PostgreSQL.
+
+    Accepts an optional JSON body:
+      { "project": "Sonrisa", "folder": "G1_2_8_9_10_74m_70_80_ovrlp_20260212" }
+
+    When 'folder' is omitted, all flight folders under the project are scanned.
+    When 'project' is also omitted, all projects in layout_data are scanned.
+    """
+    body = request.get_json(silent=True) or {}
+    project_filter = body.get("project")
+    folder_filter = body.get("folder")
+
+    results = {}
+    try:
+        projects_to_scan = []
+        if project_filter:
+            project_dir = os.path.join(BASE_LAYOUT_DIR, project_filter)
+            if os.path.isdir(project_dir):
+                projects_to_scan = [(project_filter, project_dir)]
+        else:
+            for entry in sorted(os.listdir(BASE_LAYOUT_DIR)):
+                entry_path = os.path.join(BASE_LAYOUT_DIR, entry)
+                if os.path.isdir(entry_path) and not entry.startswith("_"):
+                    projects_to_scan.append((entry, entry_path))
+
+        for project_name, project_dir in projects_to_scan:
+            if folder_filter:
+                folder_path = os.path.join(project_dir, folder_filter)
+                flight_date, _ = parse_folder(folder_filter)
+                if not flight_date:
+                    results[f"{project_name}/{folder_filter}"] = {"error": "folder name has no date"}
+                    continue
+                try:
+                    result = ingest_flight_folder(project_name, folder_filter, folder_path)
+                    results[f"{project_name}/{folder_filter}"] = result
+                except Exception as exc:
+                    results[f"{project_name}/{folder_filter}"] = {"error": str(exc)}
+            else:
+                try:
+                    result = ingest_project(project_name, project_dir)
+                    results[project_name] = result
+                except Exception as exc:
+                    results[project_name] = {"error": str(exc)}
+
+        _clear_all_caches()
+        return jsonify({'status': 'ok', 'results': results})
+
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
 @app.route('/api/zone_dates')
 @app.route('/api/sonrisa/dates')
 def get_zone_dates():
     request_start = time.perf_counter()
     project = get_project_from_request()
     project_layout_dir = get_layout_dir(project)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    dates = list(_all_dates_cached(project_layout_dir, dir_sig))
+    dates = list(_all_dates_cached(project))
     response = jsonify({'dates': dates})
     log_timing("get_zone_dates", request_start, project=project, count=len(dates))
     return response
@@ -3433,10 +3449,9 @@ def get_site_overview():
 
     project_layout_dir = get_layout_dir(project)
     setup_start = time.perf_counter()
-    dir_sig = _get_dir_signature(project_layout_dir)
-    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
+    available_zones = list(_available_zones_cached(project))
     # Forward-fill: include any zone that has data at or before date_id.
-    zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
+    zone_stage = _all_zone_stages_forward_fill_cached(project, date_id)
     available_zones = [z for z in available_zones if zone_stage.get(z)]
     log_timing(
         "site_overview_calc_setup",
@@ -3453,17 +3468,13 @@ def get_site_overview():
     stage_progress_status_counts = _init_stage_status_matrix()
     aggregation_start = time.perf_counter()
     for zone in available_zones:
-        # Use most-recent folder at or before date_id so forward-filled zones are included.
-        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig)
+        # Use most-recent flight at or before date_id so forward-filled zones are included.
+        best = _zone_most_recent_folder_at_or_before(project, zone, date_id)
         if not best:
             continue
-        date_folder_path = best[1]
-        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
+        folder_name = best[1]
         tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
+            project, zone, folder_name_or_latest=folder_name
         )
         if not tracker_info:
             continue
@@ -3498,9 +3509,7 @@ def get_site_overview():
 
     completed_zones = sum(1 for r in rows if r["pct"] == "100.0")
     bounds_start = time.perf_counter()
-    json_path = get_zone_json_path(project_layout_dir)
-    json_sig = get_file_signature(json_path) if json_path else (0, 0)
-    all_zone_bounds = _zone_bounds_cached(json_path, json_sig) if json_path else {}
+    all_zone_bounds = _zone_bounds_cached(project)
     log_timing("site_overview_calc_bounds", bounds_start, project=project, date=date_id, total_zones=len(all_zone_bounds))
     serialize_start = time.perf_counter()
     response = jsonify({
@@ -3527,17 +3536,15 @@ def get_date_bundle():
         return jsonify({'error': 'Date required'}), 400
 
     project_layout_dir = get_layout_dir(project)
-    dir_sig = _get_dir_signature(project_layout_dir)
-    json_path = get_zone_json_path(project_layout_dir)
-    json_sig = get_file_signature(json_path) if json_path else (0, 0)
-    zone_bounds = _zone_bounds_cached(json_path, json_sig)
-    available_zones = list(_available_zones_cached(project_layout_dir, dir_sig))
-    zone_stage = _all_zone_stages_forward_fill_cached(project_layout_dir, date_id, dir_sig)
+    zone_bounds = _zone_bounds_cached(project)
+    available_zones = list(_available_zones_cached(project))
+    zone_stage = _all_zone_stages_forward_fill_cached(project, date_id)
     available_zones = [z for z in available_zones if zone_stage.get(z)]
     overall_bounds = compute_zone_overall_bounds(zone_bounds)
     if not overall_bounds:
         return jsonify({'error': 'Unable to compute zone bounds'}), 500
 
+    dir_sig = _get_dir_signature(project_layout_dir)
     include_videos = (request.args.get("include_videos", "0").strip().lower() in ("1", "true", "yes", "on"))
     if include_videos:
         if is_blob_video_backend_enabled():
@@ -3559,16 +3566,12 @@ def get_date_bundle():
     total_trackers = 0
 
     for zone in available_zones:
-        best = _zone_most_recent_folder_at_or_before(project_layout_dir, zone, date_id, dir_sig)
+        best = _zone_most_recent_folder_at_or_before(project, zone, date_id)
         if not best:
             continue
-        date_folder_path = best[1]
-        csv_path = find_sonrisa_zone_csv(date_folder_path, zone)
-        status_json_path = find_sonrisa_zone_status_json(date_folder_path, zone)
-        csv_sig = optional_file_signature(csv_path)
-        status_json_sig = optional_file_signature(status_json_path)
+        folder_name = best[1]
         tracker_info = get_tracker_info_from_sources(
-            csv_path, csv_sig, status_json_path, status_json_sig
+            project, zone, folder_name_or_latest=folder_name
         )
         if not tracker_info:
             continue
@@ -3707,7 +3710,30 @@ def get_zone_image(zone, date_str):
             date_folder_path = os.path.dirname(fallback_tif_path)
             zone_tif = fallback_zone_tif
         else:
-            return jsonify({'error': 'Zone TIFF not found'}), 404
+            # New folder format: no TIF available; serve the pre-rendered JPG directly.
+            prerendered = find_prerendered_zone_jpg(date_folder_path, zone)
+            if not prerendered:
+                return jsonify({'error': 'Zone TIFF not found'}), 404
+            web_path = prerendered
+            web_sig = get_file_signature(web_path)
+            requested_format = (request.args.get("format") or "").lower()
+            accepts_webp = "image/webp" in (request.headers.get("Accept") or "").lower()
+            target_format = "webp" if (requested_format == "webp" or (requested_format != "jpg" and accepts_webp)) else "jpeg"
+            quality = WEBP_QUALITY if target_format == "webp" else JPEG_QUALITY
+            etag = build_etag("sonrisa-image", web_path, web_sig, target_format, quality, WEB_IMAGE_MAX_DIMENSION)
+            if request_etag_matches(etag):
+                return make_not_modified_response(etag)
+            image_bytes, content_type, out_w, out_h = encode_image_file_cached(
+                web_path, web_sig, target_format, quality, WEB_IMAGE_MAX_DIMENSION,
+            )
+            response = make_response(image_bytes)
+            response.headers["Content-Type"] = content_type
+            response.headers["Content-Length"] = str(len(image_bytes))
+            apply_cache_headers(response, etag)
+            log_timing("get_sonrisa_image_cached", request_start, zone=zone, date=date_str,
+                       file=os.path.basename(web_path), bytes=len(image_bytes),
+                       width=out_w, height=out_h, fmt=target_format)
+            return response
     web_path = get_or_create_sonrisa_web_jpg(date_folder_path, zone_tif, max_dimension=4000)
     if web_path and os.path.exists(web_path):
         web_sig = get_file_signature(web_path)
@@ -4336,7 +4362,11 @@ def handle_click():
                     zone_tif = fallback_zone_tif
                     tif_path = fallback_tif_path
                 else:
-                    return jsonify({'error': 'TIFF file not found'}), 404
+                    # New folder format: synthesize geo-transform from pre-rendered JPG
+                    prerendered = find_prerendered_zone_jpg(date_folder_path, zone)
+                    if not prerendered:
+                        return jsonify({'error': 'TIFF file not found'}), 404
+                    tif_path = prerendered
             else:
                 tif_path = os.path.join(date_folder_path, zone_tif)
         else:
@@ -4346,22 +4376,30 @@ def handle_click():
                 tif_path = os.path.join(LEWISTIFS_DIR, f"{date_match}.tif")
                 if not os.path.exists(tif_path):
                     return jsonify({'error': 'TIFF file not found'}), 404
+
+        tif_sig_click = get_file_signature(tif_path)
+        try:
+            with rasterio.open(tif_path) as src:
+                # Convert pixel coordinates to geographic coordinates
+                # Note: rasterio uses (row, col) = (y, x)
+                src_transform = list(src.transform)
+                tif_crs = src.crs
+                if is_identity_or_missing_georef(src_transform, tif_crs):
+                    raise ValueError("Missing georeference in source image")
+                lon, lat = src.xy(y, x)
+        except Exception:
+            # Pre-rendered JPG path — synthesize transform from zone bounds
+            zone_bounds_map = _zone_bounds_cached(project)
+            zb = zone_bounds_map.get(zone) or [0.0, 0.0, 1.0, 1.0]
+            min_lat_z, min_lon_z, max_lat_z, max_lon_z = float(zb[0]), float(zb[1]), float(zb[2]), float(zb[3])
+            _syn_transform, syn_w, syn_h, tif_crs = get_synthetic_tif_metadata_cached(
+                tif_path, tif_sig_click, min_lat_z, min_lon_z, max_lat_z, max_lon_z
+            )
+            a, _b, c, _d, e, f = _syn_transform
+            lon = a * x + c
+            lat = e * y + f
         
-        with rasterio.open(tif_path) as src:
-            # Convert pixel coordinates to geographic coordinates
-            # Note: rasterio uses (row, col) = (y, x)
-            lon, lat = src.xy(y, x)
-            tif_crs = src.crs
-        
-        if is_zone_project:
-            json_path = get_zone_json_path(project_layout_dir)
-        else:
-            json_path = find_project_json(project_layout_dir, project)
-        if not json_path or not os.path.exists(json_path):
-            return jsonify({'error': 'JSON file not found'}), 404
-        
-        json_sig = get_file_signature(json_path)
-        boundaries = get_tracker_boundaries_cached(json_path, json_sig)
+        boundaries = get_tracker_boundaries_cached(project)
         if is_zone_project:
             normalized_boundaries = {}
             for tracker_id, b in boundaries.items():
